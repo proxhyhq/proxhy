@@ -759,7 +759,10 @@ class StatCheckPlugin:
     @subscribe("statcheck:update")
     async def _event_statcheck_update(self: ProxhyPlugin, _match, data: GamePlayer):
         if set(self.players_with_stats.keys()) == self.who_players:
+            # all players have stats
             self.who_players_statted.set()
+
+            await self.emit("statcheck:all_players_statted")
 
             if self.settings.bedwars.display_top_stats.get() != "OFF":
                 if not self.stats_highlighted:

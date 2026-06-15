@@ -4,7 +4,7 @@ regions around bases and diamond/emerald generators.
 """
 
 from plugins.commands import command
-from typing import overload
+from typing import overload, cast
 from petty.events import listen_server, subscribe, listen_client
 from petty.protocol.datatypes import (
     Angle,
@@ -24,7 +24,7 @@ from petty.protocol.datatypes import (
 from proxhy.utils import uuid_version
 from gamestate.models import Player
 from gamestate.state import GameState
-from plugins.statcheck import GamePlayer
+from plugins.statcheck import GamePlayer, BW_MAPS
 # from plugins.commands import command
 
 from typing import Literal, TYPE_CHECKING
@@ -33,7 +33,6 @@ from collections import deque
 
 import time
 import asyncio
-import math
 
 if TYPE_CHECKING:
     from proxhy.plugin import ProxhyPlugin
@@ -43,6 +42,10 @@ class BoundariesPlugin:
     def _init_boundaries(self: ProxhyPlugin):
         self.gamestate: GameState
         self.last_game_start: float = float("-inf")
+
+        # last "You can't place blocks here!" message timestamp
+        self.last_cpb: float = float("-inf")
+        self.cpb_event = asyncio.Event()
 
         # x, y, z, yaw (looking)
         self.entities_teleported: dict[
@@ -57,23 +60,111 @@ class BoundariesPlugin:
         # developer flag to enable features that make it
         # easier to get the boundary positions on new maps
         self.log_boundaries = True
+        self.teams_populated = False
 
         # corners relative to spawn position
         # based on direction facing when you spawned in
         self.boundary_corner_1 = Pos(0, 0, 0)
         self.boundary_corner_2 = Pos(0, 0, 0)
 
+    @subscribe(r"chat:server:The game starts in 1 second!")
+    async def received_game_start_chat(self: ProxhyPlugin, match, buff: Buffer):
+        self.downstream.send_packet(0x02, buff.getvalue())
+
+        # reset team dicts at the start of the game
+        self.entities_teleported = {}
+        self.team_spawnpoints = {}
+
+        self.last_game_start = time.time()
+        self.teams_populated = False
+
+        if self.game.map is None:
+            self.logger.warning("self.game.map is None!")
+            return
+
+        try:
+            self.map_data: dict = BW_MAPS[self.game.map.name]
+        except KeyError:
+            self.logger.warning(f"Unknown map: '{self.game.map.name}'")
+            return
+
     def game_recently_started(self: ProxhyPlugin, window: float = 2.0) -> bool:
         # game started less than `window` seconds ago
         return time.time() - self.last_game_start < window
 
+    def get_bedwars_team_count(self: ProxhyPlugin) -> int | None:
+        if not self.game.mode or "bedwars" not in self.game.mode:
+            return None
+
+        if "eight" in self.game.mode:
+            return 8
+        elif "four" in self.game.mode:
+            return 4
+        elif "two" in self.game.mode:
+            return 2
+        else:
+            return None
+
+    @subscribe("statcheck:all_players_statted")
+    async def teams_now_populated(self: ProxhyPlugin, *_):
+
+        self.teams_populated = True
+
+        if len(self.entities_teleported.keys()) == 0:
+            # we did teleport entities, but we didn't log them
+            return
+
+        for e in list(self.entities_teleported.keys()):
+            # wrap in list to avoid deleting from dict white iterating
+            try:
+                game_player: GamePlayer = self.game_players[e]
+                if e not in self.real_players():
+                    raise KeyError
+
+                team = game_player.team.name.lower()
+                if team in self.team_spawnpoints:
+                    continue
+
+                x, y, z, yaw = self.entities_teleported[e]
+
+                self.team_spawnpoints[team] = (x, y, z, yaw)
+            except KeyError:
+                # for redundancy, clean dict of non-player entities that might've snuck through
+                del self.entities_teleported[e]
+
+        # see if we got any new spawnpoints
+        team_count = self.get_bedwars_team_count()
+        if team_count is None:
+            self.logger.warning("Could not get team count")
+            return
+
+        if self.map_data.get("spawnpoints") is None:
+            self.map_data["spawnpoints"] = {}
+        if team_count > len(self.map_data["spawnpoints"].keys()):
+            # we have NO spawnpoint data for this map or PARTIAL data
+            # overwrite existing entries because it's easier and in theory they shouldn't change
+            for team, spawnpoint in self.team_spawnpoints.items():
+                self.map_data["spawnpoints"][team] = spawnpoint
+
+        print(f"Filtered spawnpoints: {self.team_spawnpoints}")
+
     def validate_yaw(
-        self: ProxhyPlugin, yaw: int | float
+        self: ProxhyPlugin, yaw: int | float, snap=True
     ) -> Literal[0, 90, -90, 180, -180] | None:
         yaw = int(yaw)
         if yaw not in {0, 90, -90, 180, -180}:
-            self.logger.warning(f"Received yaw on a non-90 degree increment! ({yaw})")
-            return
+            if snap:
+                snapped = round(yaw / 90) * 90 % 360  # 0, 90, 180, 270
+                # cast so it knows its on the validated intervals
+                return cast(
+                    Literal[0, 90, -90, 180, -180],
+                    {270: -90, 180: -180}.get(snapped, snapped),
+                )
+            else:
+                self.logger.warning(
+                    f"Received yaw on a non-90 degree increment! ({yaw})"
+                )
+                return
         return yaw
 
     @listen_server(0x18)  # on entity teleport
@@ -87,53 +178,25 @@ class BoundariesPlugin:
         ):
             entity_id = buff.unpack(VarInt)
             entity = self.gamestate.get_entity(entity_id)
-            if entity is None:
+            if (
+                entity is None
+                or not isinstance(entity, Player)
+                or entity.name in self.entities_teleported.keys()
+                or uuid_version == 2  # uuid == 2 for npcs
+            ):
                 return
-            entity_uuid = entity.uuid
 
-            # if entity exists and is not an npc
-            if uuid_version(entity_uuid) != 2:
-                # divide by 32 because of stupid chud datatype fixed point number
-                x = buff.unpack(Int) / 32.0
-                y = buff.unpack(Int) / 32.0
-                z = buff.unpack(Int) / 32.0
+            # divide by 32 because of stupid chud datatype fixed point number
+            x = buff.unpack(Int) / 32.0
+            y = buff.unpack(Int) / 32.0
+            z = buff.unpack(Int) / 32.0
 
-                yaw = buff.unpack(Angle)
-                yaw = self.validate_yaw(yaw)
+            yaw = buff.unpack(Angle)
+            yaw = self.validate_yaw(yaw)
+            if yaw is None:
+                return
 
-                if yaw is None:
-                    return
-
-                if isinstance(entity, Player):
-                    self.entities_teleported[entity.name] = (x, y, z, yaw)
-                else:  # fallback in case idk
-                    player = self.gamestate.get_player_by_uuid(entity_uuid)
-                    if player is not None:
-                        self.entities_teleported[player.name] = (x, y, z, yaw)
-
-            await asyncio.sleep(1)  # wait for teams to populate
-
-            print(f"{len(self.entities_teleported)} entities teleported.")
-            for e in list(self.entities_teleported.keys()):
-                # wrap in list to avoid deleting from dict white iterating
-                try:
-                    game_player: GamePlayer = self.game_players[e]
-                    if e not in self.real_players():
-                        raise KeyError
-
-                    team = game_player.team.name.lower()
-                    if team in self.team_spawnpoints:
-                        continue
-
-                    x, y, z, yaw = self.entities_teleported[e]
-
-                    self.team_spawnpoints[team] = (x, y, z, yaw)
-                except KeyError:
-                    # for redundancy, clean dict of non-player entities that might've snuck through
-                    del self.entities_teleported[e]
-
-            await asyncio.sleep(0.5)
-            print(f"{len(self.team_spawnpoints)} spawnpoints logged.")
+            self.entities_teleported[entity.name] = (x, y, z, yaw)
 
     @listen_server(0x08, blocking=True)  # player move and look packet
     async def read_own_spawnpoint(self: ProxhyPlugin, buff: Buffer):
@@ -152,21 +215,12 @@ class BoundariesPlugin:
             if yaw is None:
                 return
 
-            await asyncio.sleep(1)  # make sure teams have populated
+            self.entities_teleported[self.nick_or_username] = (x, y, z, yaw)
 
-            own_team = self.get_own_team_info()
-            self.team_spawnpoints[own_team.name] = (x, y, z, yaw)
-            print(f"Got own spawnpoint: ({x}, {y}, {z}); yaw={yaw}")
-
-    @subscribe(r"chat:server:The game starts in 1 second!")
-    async def received_game_start_chat(self: ProxhyPlugin, match, buff: Buffer):
+    @subscribe(r"chat:server:You can't place blocks here!")
+    async def received_cant_place_chat(self: ProxhyPlugin, match, buff: Buffer):
         self.downstream.send_packet(0x02, buff.getvalue())
-
-        # reset team dicts at the start of the game
-        self.entities_teleported = {}
-        self.team_spawnpoints = {}
-
-        self.last_game_start = time.time()
+        self.cpb_event.set()
 
     @staticmethod
     @overload
@@ -248,6 +302,12 @@ class BoundariesPlugin:
 
     @command("getboundary")
     async def get_boundary(self: ProxhyPlugin):
+        bc1x, bc1y, bc1z, bc2x, bc2y, bc2z = self._get_boundary()
+        self.downstream.chat(
+            f"Current boundary: ({bc1x}, {bc1y}, {bc1z}) -> ({bc2x}, {bc2y}, {bc2z})"
+        )
+
+    def _get_boundary(self: ProxhyPlugin):
         bc1x, bc1y, bc1z = (
             self.boundary_corner_1.x,
             self.boundary_corner_1.y,
@@ -260,16 +320,18 @@ class BoundariesPlugin:
             self.boundary_corner_2.z,
         )
 
-        self.downstream.chat(
-            f"Current boundary: ({bc1x}, {bc1y}, {bc1z}) -> ({bc2x}, {bc2y}, {bc2z})"
-        )
+        return bc1x, bc1y, bc1z, bc2x, bc2y, bc2z
 
     def update_boundary_size(self: ProxhyPlugin, block_deleted: int, pos: Pos):
-        if block_deleted != 35:  # wool
-            return
-
-        if not self.team_spawnpoints:
-            self.downstream.chat("We don't have any spawnpoint positions!")
+        # TODO: debug why it only works on some maps
+        #   - known debug: this method is still getting called for those maps, not sure where it's exiting early tho
+        #   - known debug: own spawnpoint WAS logged during these trials, so nearest spawnpoint is valid
+        # TODO: debug why using magic toystick updates boundary despite not getting a "you can't place blocks here" msg
+        if self.map_data.get("spawnpoints") is None:
+            if self.game.map is not None:
+                self.logger.warning(
+                    f"We don't have any spawnpoint positions for {self.game.map.name}!"
+                )
             return
 
         # how many blocks away do we accept that we could still be in a base
@@ -277,26 +339,30 @@ class BoundariesPlugin:
 
         # find nearest base center w/ manhattan distance because spawn
         # block placement protections are cuboids
+
+        # fmt: off
         distances = [
             (
                 team,
                 yaw,
-                (pos.x - spawn_x) + (pos.y - spawn_y) + (pos.z - spawn_z),
+                abs(pos.x - spawn_x) + abs(pos.y - spawn_y) + abs(pos.z - spawn_z)
             )
-            for team, (spawn_x, spawn_y, spawn_z, yaw) in self.team_spawnpoints.items()
+            for team, (spawn_x, spawn_y, spawn_z, yaw) in self.map_data["spawnpoints"].items()
         ]
+        # fmt: on
         closest_team, yaw, min_dist = min(distances, key=lambda key: key[2])
 
         # we're more than max_dist blocks from the nearest base spawnpoint.
         # probably at a diamond gen or something, so don't expand the radius
         if min_dist > max_dist:
+            print("min_dist > max_dist")
             return
 
         # check if the block deleted is already inside the known region
-        spawn_x = int(self.team_spawnpoints[closest_team][0])
-        spawn_y = int(self.team_spawnpoints[closest_team][1])
-        spawn_z = int(self.team_spawnpoints[closest_team][2])
-        yaw = self.validate_yaw((self.team_spawnpoints[closest_team][3]))
+        spawn_x = int(self.map_data["spawnpoints"][closest_team][0])
+        spawn_y = int(self.map_data["spawnpoints"][closest_team][1])
+        spawn_z = int(self.map_data["spawnpoints"][closest_team][2])
+        yaw = self.validate_yaw((self.map_data["spawnpoints"][closest_team][3]))
         if yaw:
             rel_pos = self.get_relative_pos_yaw(
                 pos, Pos(spawn_x, spawn_y, spawn_z), yaw
@@ -316,9 +382,9 @@ class BoundariesPlugin:
             self.boundary_corner_2.z,
         )
 
-        inside_x = bc1x <= rel_pos.x <= bc2x
-        inside_y = bc1y <= rel_pos.y <= bc2y
-        inside_z = bc1z <= rel_pos.z <= bc2z
+        inside_x = min(bc1x, bc2x) <= rel_pos.x <= max(bc1x, bc2x)
+        inside_y = min(bc1y, bc2y) <= rel_pos.y <= max(bc1y, bc2y)
+        inside_z = min(bc1z, bc2z) <= rel_pos.z <= max(bc1z, bc2z)
 
         if inside_x and inside_y and inside_z:
             # we are already inside the boundary! no action required
@@ -326,32 +392,61 @@ class BoundariesPlugin:
             return
         else:
             # expand boundary
-            self.downstream.chat("Expanding boundary!")
+            prev_boundary = self._get_boundary()
             if not inside_x:
                 if rel_pos.x > 0:
                     self.boundary_corner_1.x = rel_pos.x
-                if rel_pos.x < 0:
+                elif rel_pos.x < 0:
                     self.boundary_corner_2.x = rel_pos.x
             if not inside_y:
                 if rel_pos.y > 0:
                     self.boundary_corner_1.y = rel_pos.y
-                if rel_pos.y < 0:
+                elif rel_pos.y < 0:
                     self.boundary_corner_2.y = rel_pos.y
             if not inside_z:
                 if rel_pos.z > 0:
                     self.boundary_corner_1.z = rel_pos.z
-                if rel_pos.z < 0:
+                elif rel_pos.z < 0:
                     self.boundary_corner_2.z = rel_pos.z
+            new_boundary = self._get_boundary()
 
-            self.downstream.chat("")
+            def fmt_val(old, new):
+                return f"§e{new}§r" if new != old else str(new)
 
-        # TODO: add map data for base block restriction bounding boxes relative to
-        # spawn positions
-        # TODO: import those bounding boxes; check whether passed in position is inside
-        # that region. if not, make sure it's within a certain range (figure out what that should be?)
-        # TODO: if we pass validation above, expand the boundary for that map and save locally
-        # TODO: implement /updateboundary command that saves the newly expanded boundary to
+            p, n = prev_boundary, new_boundary
+            bc1 = (
+                f"({fmt_val(p[0], n[0])}, {fmt_val(p[1], n[1])}, {fmt_val(p[2], n[2])})"
+            )
+            bc2 = (
+                f"({fmt_val(p[3], n[3])}, {fmt_val(p[4], n[4])}, {fmt_val(p[5], n[5])})"
+            )
+            msg = f"Boundary: {bc1}§r -> {bc2}§r"
+
+            self.downstream.chat(msg)
+
+        # TODO: implement /saveboundary command that saves the newly expanded boundary to
         # the map data json file so we can start placing the boundaries on the edges of the build limit
+
+    async def try_update_boundary(self: ProxhyPlugin, block_deleted: int, pos: Pos):
+        """
+        Called when a block was deleted; checks if it's a 'You can't place blocks
+        here!' message or if the block was deleted for some other reason. Also
+        checks that the block deleted was wool.
+        """
+        if block_deleted != 35:  # wool
+            return
+
+        # it's possible we got message before server deleted block
+        if time.time() - self.last_cpb < 0.2:
+            self.update_boundary_size(block_deleted, pos)
+        else:
+            # see if we get a "can't place blocks here" msg in the next 0.2s
+            try:
+                await asyncio.wait_for(self.cpb_event.wait(), timeout=0.2)
+                self.update_boundary_size(block_deleted, pos)
+            except asyncio.TimeoutError:
+                # assume block got deleted for a different reason
+                pass
 
     @listen_server(0x23, blocking=True)
     async def block_changed(self: ProxhyPlugin, buff: Buffer):
@@ -361,7 +456,6 @@ class BoundariesPlugin:
             pos = buff.unpack(Position)
             block_id = buff.unpack(VarInt)
             block_type = block_id >> 4
-            # block_meta = block_id & 15
 
             # if the block is air (id=0) and was a block we recently placed
             # then the server deleted one of our recently placed blocks
@@ -369,8 +463,7 @@ class BoundariesPlugin:
                 deque_id = self.recently_placed.index(pos)
                 block_deleted = self.placed_mappings[deque_id]
 
-                self.downstream.chat(f"Server deleted your §9{block_deleted} block!")
-                self.update_boundary_size(block_deleted, pos)
+                await self.try_update_boundary(block_deleted, pos)
 
     @listen_server(0x22, blocking=True)
     async def multi_block_change(self: ProxhyPlugin, buff: Buffer):
@@ -397,11 +490,14 @@ class BoundariesPlugin:
                     deque_id = self.recently_placed.index(pos)
                     block_deleted = self.placed_mappings[deque_id]
 
-                    self.update_boundary_size(block_deleted, pos)
+                    await self.try_update_boundary(block_deleted, pos)
 
                     self.downstream.chat(
                         f"Server deleted your §9{block_deleted} block! §e(multi-block change)"
                     )
+
+    # @command("saveboundary")
+    # async def save_boundary(self: ProxhyPlugin):
 
     async def place_boundary(
         self: ProxhyPlugin,
