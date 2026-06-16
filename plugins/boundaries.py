@@ -67,6 +67,9 @@ class BoundariesPlugin:
         self.boundary_corner_1 = Pos(0, 0, 0)
         self.boundary_corner_2 = Pos(0, 0, 0)
 
+        # window in which to consider the "you can't place blocks here!" chat msg as being recent
+        self.CPB_WINDOW = 0.2
+
     @subscribe(r"chat:server:The game starts in 1 second!")
     async def received_game_start_chat(self: ProxhyPlugin, match, buff: Buffer):
         self.downstream.send_packet(0x02, buff.getvalue())
@@ -88,7 +91,7 @@ class BoundariesPlugin:
             self.logger.warning(f"Unknown map: '{self.game.map.name}'")
             return
 
-    def game_recently_started(self: ProxhyPlugin, window: float = 2.0) -> bool:
+    def game_recently_started(self: ProxhyPlugin, window: float = 5.0) -> bool:
         # game started less than `window` seconds ago
         return time.time() - self.last_game_start < window
 
@@ -111,9 +114,14 @@ class BoundariesPlugin:
         self.teams_populated = True
 
         if len(self.entities_teleported.keys()) == 0:
-            # we did teleport entities, but we didn't log them
+            # preseumably we did teleport entities, but we didn't log them
+            if self.log_boundaries:
+                self.logger.warning(
+                    "self.log_boundaries enabled; did not teleport any entities."
+                )
             return
 
+        # core loop: extract spawnpoints and clean dict of non-player entities
         for e in list(self.entities_teleported.keys()):
             # wrap in list to avoid deleting from dict white iterating
             try:
@@ -132,10 +140,10 @@ class BoundariesPlugin:
                 # for redundancy, clean dict of non-player entities that might've snuck through
                 del self.entities_teleported[e]
 
-        # see if we got any new spawnpoints
+        # see if we got any new spawnpoints we didn't have saved to bedwars map data json beforehand
         team_count = self.get_bedwars_team_count()
         if team_count is None:
-            self.logger.warning("Could not get team count")
+            self.logger.warning(f"Could not get team count for mode {self.game.mode}")
             return
 
         if self.map_data.get("spawnpoints") is None:
@@ -181,8 +189,8 @@ class BoundariesPlugin:
             if (
                 entity is None
                 or not isinstance(entity, Player)
-                or entity.name in self.entities_teleported.keys()
-                or uuid_version == 2  # uuid == 2 for npcs
+                # or entity.name in self.entities_teleported.keys()
+                or uuid_version(entity.uuid) == 2  # uuid == 2 for npcs
             ):
                 return
 
@@ -220,7 +228,13 @@ class BoundariesPlugin:
     @subscribe(r"chat:server:You can't place blocks here!")
     async def received_cant_place_chat(self: ProxhyPlugin, match, buff: Buffer):
         self.downstream.send_packet(0x02, buff.getvalue())
+
         self.cpb_event.set()
+        await asyncio.sleep(self.CPB_WINDOW)  # yield to the event loop
+        if self.cpb_event.is_set():
+            print("Clearing event!")
+            # might've gotten cleared in that sleep window
+            self.cpb_event.clear()
 
     @staticmethod
     @overload
@@ -252,14 +266,14 @@ class BoundariesPlugin:
 
     @staticmethod
     def get_relative_pos_yaw(
-        pos1: Pos, pos2: Pos, yaw: Literal[0, 90, -90, 180, -180]
+        pos: Pos, anchor: Pos, yaw: Literal[0, 90, -90, 180, -180]
     ) -> Pos:
         # pos1 is arbitrary position
         # pos2 is centered position with yaw
         # 1. Calculate standard world deltas
-        dx = pos1.x - pos2.x
-        dy = pos1.y - pos2.y
-        dz = pos1.z - pos2.z
+        dx = pos.x - anchor.x
+        dy = pos.y - anchor.y
+        dz = pos.z - anchor.z
 
         # 2. Translate world deltas to local deltas based on yaw
         if yaw == 0:
@@ -332,6 +346,8 @@ class BoundariesPlugin:
                 self.logger.warning(
                     f"We don't have any spawnpoint positions for {self.game.map.name}!"
                 )
+            else:
+                self.logger.warning("self.game.map is None!")
             return
 
         # how many blocks away do we accept that we could still be in a base
@@ -355,7 +371,6 @@ class BoundariesPlugin:
         # we're more than max_dist blocks from the nearest base spawnpoint.
         # probably at a diamond gen or something, so don't expand the radius
         if min_dist > max_dist:
-            print("min_dist > max_dist")
             return
 
         # check if the block deleted is already inside the known region
@@ -388,7 +403,6 @@ class BoundariesPlugin:
 
         if inside_x and inside_y and inside_z:
             # we are already inside the boundary! no action required
-            self.downstream.chat("Already inside the boundary.")
             return
         else:
             # expand boundary
@@ -437,16 +451,27 @@ class BoundariesPlugin:
             return
 
         # it's possible we got message before server deleted block
-        if time.time() - self.last_cpb < 0.2:
+        # if (time.time() - self.last_cpb) < self.CPB_WINDOW:
+        #     self.update_boundary_size(block_deleted, pos)
+        # else:
+        # see if we get a "can't place blocks here" msg in the next self.CPB_WINDOW seconds
+        try:
+            await asyncio.wait_for(self.cpb_event.wait(), timeout=self.CPB_WINDOW)
             self.update_boundary_size(block_deleted, pos)
-        else:
-            # see if we get a "can't place blocks here" msg in the next 0.2s
-            try:
-                await asyncio.wait_for(self.cpb_event.wait(), timeout=0.2)
-                self.update_boundary_size(block_deleted, pos)
-            except asyncio.TimeoutError:
-                # assume block got deleted for a different reason
-                pass
+        except asyncio.TimeoutError:
+            # assume block got deleted for a different reason
+            print("Did not receive CPB message!")
+            pass
+
+    async def handle_block_removal(self: ProxhyPlugin, block_id: int, pos: Pos) -> None:
+        # if the block is air (id=0) and was a block we recently placed
+        # then the server deleted one of our recently placed blocks
+        if block_id == 0 and pos in self.recently_placed:
+            deque_id = self.recently_placed.index(pos)
+            block_deleted = self.placed_mappings[deque_id]
+            self.recently_placed.remove(pos)
+
+            await self.try_update_boundary(block_deleted, pos)
 
     @listen_server(0x23, blocking=True)
     async def block_changed(self: ProxhyPlugin, buff: Buffer):
@@ -457,13 +482,7 @@ class BoundariesPlugin:
             block_id = buff.unpack(VarInt)
             block_type = block_id >> 4
 
-            # if the block is air (id=0) and was a block we recently placed
-            # then the server deleted one of our recently placed blocks
-            if block_type == 0 and pos in self.recently_placed:
-                deque_id = self.recently_placed.index(pos)
-                block_deleted = self.placed_mappings[deque_id]
-
-                await self.try_update_boundary(block_deleted, pos)
+            await self.handle_block_removal(block_type, pos)
 
     @listen_server(0x22, blocking=True)
     async def multi_block_change(self: ProxhyPlugin, buff: Buffer):
@@ -484,17 +503,8 @@ class BoundariesPlugin:
                 z = chunk_z * 16 + rel_z_pos
 
                 block_id = buff.unpack(VarInt)
-                pos = Pos(x, y, z)
 
-                if block_id == 0 and pos in self.recently_placed:
-                    deque_id = self.recently_placed.index(pos)
-                    block_deleted = self.placed_mappings[deque_id]
-
-                    await self.try_update_boundary(block_deleted, pos)
-
-                    self.downstream.chat(
-                        f"Server deleted your §9{block_deleted} block! §e(multi-block change)"
-                    )
+                await self.handle_block_removal(block_id, Pos(x, y, z))
 
     # @command("saveboundary")
     # async def save_boundary(self: ProxhyPlugin):
@@ -505,6 +515,9 @@ class BoundariesPlugin:
         b_type: Literal["corner", "edge"],
         rot: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ):
+        # good edge case test maps for final boundary implementation:
+        #   - apollo
+
         # armor stand internal id: 1E; network ID: 4E
 
         x_adjust = int(pos[0] * 32)  # "fixed-point number"
