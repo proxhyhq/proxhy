@@ -505,7 +505,7 @@ class StatCheckPlugin:
             base = f"{player.team.prefix} §5[NICK] {player.username}"
         elif show_stats:
             prefix, star, name, tail = self._tab_parts(player)
-            if self.settings.bedwars.tablist.align_columns.get() == "ON":
+            if self.settings.bedwars.tablist.stats.align_columns.get() == "ON":
                 # Pad each column to the widest entry with invisible 1px glyphs so
                 # the star, name and FKDR columns line up vertically (see
                 # proxhy.tablist). The team prefix ends bold (e.g. "§c§lR"); a "§r"
@@ -920,7 +920,7 @@ class StatCheckPlugin:
                 self._send_tablist_update({player.uuid: display_name})
 
             # a new player's stats may widen a column; realign every row
-            if self.settings.bedwars.tablist.align_columns.get() == "ON":
+            if self.settings.bedwars.tablist.stats.align_columns.get() == "ON":
                 self._rebuild_display_names()
 
         await self.emit("statcheck:update", player)

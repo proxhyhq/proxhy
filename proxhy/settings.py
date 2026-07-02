@@ -63,6 +63,22 @@ class StatsGroup(SettingGroup):
             storage=storage,
         )
 
+        self.align_columns: Setting[Literal["OFF", "ON"]] = create_setting(
+            key="bedwars.tablist.stats.align_columns",
+            display_name="Align Tablist Columns",
+            description=(
+                "In Bedwars, pad the tablist with invisible glyphs so stars, names\n"
+                "and FKDR line up in neat columns. Requires the Proxhy resource pack."
+            ),
+            item="minecraft:paper",
+            states={
+                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
+                "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
+            },
+            default_state="ON",
+            storage=storage,
+        )
+
 
 class TablistGroup(SettingGroup):
     def __init__(self, storage: SettingsStorage):
@@ -111,22 +127,6 @@ class TablistGroup(SettingGroup):
                 "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
             },
             default_state="OFF",
-            storage=storage,
-        )
-
-        self.align_columns: Setting[Literal["OFF", "ON"]] = create_setting(
-            key="bedwars.tablist.align_columns",
-            display_name="Align Tablist Columns",
-            description=(
-                "In Bedwars, pad the tablist with invisible glyphs so stars, names\n"
-                "and FKDR line up in neat columns. Requires the Proxhy resource pack."
-            ),
-            item="minecraft:paper",
-            states={
-                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
-                "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
-            },
-            default_state="ON",
             storage=storage,
         )
 
