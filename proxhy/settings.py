@@ -104,13 +104,36 @@ class VisualGroup(SettingGroup):
         self.height_limit_warnings: Setting[Literal["OFF", "ON"]] = create_setting(
             key="bedwars.visual.height_limit_warnings",
             display_name="Height Limit Warnings",
-            description="When you're near the top or bottom of the map, display particles and a warning in the actionbar.",
+            description="When you're near the top or bottom of the map, display a warning in the actionbar.",
             item="minecraft:quartz_stairs",
             states={
                 "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
                 "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
             },
             default_state="ON",
+            storage=storage,
+        )
+
+        self.height_limit_particles: Setting[
+            Literal["OFF", "MINIMAL", "REDUCED", "FULL"]
+        ] = create_setting(
+            key="bedwars.visual.height_limit_particles",
+            display_name="Height Limit Particles",
+            description="When you're near the top or bottom of the map, show particles at the edge of the build region.",
+            item="minecraft:redstone",
+            states={
+                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
+                "MINIMAL": (
+                    Item.from_display_name("Orange Stained Glass Pane"),
+                    "gold",
+                ),
+                "REDUCED": (
+                    Item.from_display_name("Yellow Stained Glass Pane"),
+                    "yellow",
+                ),
+                "FULL": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
+            },
+            default_state="FULL",
             storage=storage,
         )
 
@@ -190,55 +213,6 @@ class BedwarsGroup(SettingGroup):
         )
 
 
-class CompassGroup(SettingGroup):
-    def __init__(self, storage: SettingsStorage):
-        super().__init__(
-            key="compass",
-            display_name="Compass",
-            description="Compass client settings.",
-            item="minecraft:compass",
-        )
-
-        self.discoverable: Setting[Literal["ON", "OFF"]] = create_setting(
-            key="compass.discoverable",
-            display_name="Discoverable",
-            description="Allow other players to request your node ID from the compass server",
-            item="minecraft:ender_eye",
-            states={
-                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
-                "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
-            },
-            default_state="ON",
-            storage=storage,
-        )
-
-        self.whitelist: Setting[Literal["ON", "OFF"]] = create_setting(
-            key="compass.whitelist",
-            display_name="Whitelist",
-            description="Restrict who can request your node ID from the compass server",
-            item="minecraft:filled_map",
-            states={
-                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
-                "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
-            },
-            default_state="OFF",
-            storage=storage,
-        )
-
-        self.verify_node_id: Setting[Literal["ON", "OFF"]] = create_setting(
-            key="compass.verify_node_id",
-            display_name="Verify Node ID",
-            description="Verify the Iroh node ID of incoming requests via the compass broker",
-            item="minecraft:gold_nugget",
-            states={
-                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
-                "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
-            },
-            default_state="ON",
-            storage=storage,
-        )
-
-
 class ProxhySettings(SettingGroup):
     """Main settings class with type-safe access to all settings."""
 
@@ -254,7 +228,6 @@ class ProxhySettings(SettingGroup):
         from broadcasting.settings import BroadcastSettings  # avoid circular import
 
         self.bedwars = BedwarsGroup(self._storage)
-        self.compass = CompassGroup(self._storage)
         self.broadcast = BroadcastSettings(self._storage)
 
         self.update_check: Setting[Literal["ON", "OFF"]] = create_setting(

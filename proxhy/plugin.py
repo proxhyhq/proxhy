@@ -6,12 +6,14 @@ from plugins.boundaries import BoundariesPlugin
 from plugins.broadcaster import BroadcastPlugin
 from plugins.chat import ChatPlugin
 from plugins.commands import CommandsPlugin
+from plugins.compass import CompassPlugin
 from plugins.debug import DebugPlugin
 from plugins.gamestate import GameStatePlugin
 from plugins.hypixelstate import HypixelStatePlugin
 from plugins.login import LoginPlugin
 from plugins.misc import MiscPlugin
 from plugins.settings import SettingsPlugin
+from plugins.slashproxhy import SlashProxhy
 from plugins.sound import SoundPlugin
 from plugins.spatial import SpatialPlugin
 from plugins.statcheck import StatCheckPlugin
@@ -25,12 +27,14 @@ class ProxhyPlugin(  # type: ignore
     BroadcastPlugin,
     ChatPlugin,
     CommandsPlugin,
+    CompassPlugin,
     DebugPlugin,
     GameStatePlugin,
     HypixelStatePlugin,
     LoginPlugin,
     MiscPlugin,
     SettingsPlugin,
+    SlashProxhy,
     SoundPlugin,
     SpatialPlugin,
     StatCheckPlugin,

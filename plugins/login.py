@@ -4,6 +4,7 @@ import random
 import uuid
 from importlib.metadata import version
 from importlib.resources import files
+from json import JSONDecodeError
 from secrets import token_bytes
 from typing import TYPE_CHECKING, Literal
 from unittest.mock import Mock
@@ -172,9 +173,13 @@ class LoginPlugin:
         self.username = buff.unpack(String)
 
         if not auth.user_exists(self.username):
+            self.logger.debug(f"user {self.username} does not exist; logging in")
             return await self.login()
 
         if auth.token_needs_refresh(self.username):
+            self.logger.debug(
+                f"user {self.username} needs a token refresh; regenerating credentials"
+            )
             return await self.login(reason="regen")
 
         try:
@@ -187,6 +192,9 @@ class LoginPlugin:
                 self.transferring_to_server = False
             else:
                 packet_id = 0x00
+            self.logger.warning(
+                f"failed to connect to {self.CONNECT_HOST[0]}:{self.CONNECT_HOST[1]}; {self.state=}"
+            )
             self.downstream.send_packet(
                 packet_id,
                 Chat.pack(
@@ -242,7 +250,7 @@ class LoginPlugin:
                     .click_event("open_url", device["verification_uri"])
                     .hover_text(TextComponent("Open in browser").color("yellow"))
                 )
-                .appends("and enter code")
+                .appends("and enter this code:")
                 .appends(
                     TextComponent(device["user_code"])
                     .color("green")
@@ -254,7 +262,8 @@ class LoginPlugin:
                         .appends(
                             TextComponent(device["user_code"]).color("green").bold()
                         )
-                    )
+                    ),
+                    separator="\n",
                 )
             )
 
@@ -309,6 +318,8 @@ class LoginPlugin:
                 f"Logged in! Redirecting to {self.CONNECT_HOST[0]}..."
             ).color("green")
             self.downstream.chat(success_msg)
+            if self.keep_alive_task:
+                self.keep_alive_task.cancel()
             self.state = State.LOGIN
             self.transferring_to_server = True
 
@@ -325,6 +336,9 @@ class LoginPlugin:
             if self.state == State.PLAY and self.downstream.open and self.logging_in:
                 self.downstream.send_packet(0x00, VarInt.pack(random.randint(0, 256)))
             else:
+                self.logger.debug(
+                    f"{self.state=}, {self.downstream.open=}, {self.logging_in=}; closing"
+                )
                 await self.close()
                 break
 
@@ -400,9 +414,12 @@ class LoginPlugin:
 
         if reason == "logging_in":
             self.downstream.chat(
-                "You have not logged into Proxhy with this account yet!"
+                TextComponent(
+                    "You have not logged into Proxhy with this account yet!"
+                ).color("yellow")
             )
             self.device_code_task = self.create_task(self._start_device_code_flow())
+
         else:
             self.regenerating_credentials = True
             self.downstream.set_title(
@@ -433,6 +450,7 @@ class LoginPlugin:
                     TextComponent("Please log in again:").color("yellow")
                 )
                 self.device_code_task = self.create_task(self._start_device_code_flow())
+                return
             except Exception as e:
                 return self.downstream.send_packet(
                     0x40,
@@ -565,17 +583,28 @@ class LoginPlugin:
     async def _check_for_update(self: ProxhyPlugin):
         async with httpx.AsyncClient() as aclient:
             current = utils.zero_pad_calver(version("proxhy"))
-            latest = (
-                (
-                    await aclient.get(
-                        "https://api.github.com/repos/kbidlack/proxhy/releases/latest"
+            try:
+                latest = (
+                    (
+                        await aclient.get(
+                            "https://api.github.com/repos/proxhyhq/proxhy/releases/latest"
+                        )
                     )
+                    .json()
+                    .get("name")
                 )
-                .json()
-                .get("name")
-            )
+            except JSONDecodeError:
+                self.logger.warning(
+                    "failed to fetch current release version: could not parse API response"
+                )
+                return
+            except httpx.ReadTimeout:
+                self.logger.warning(
+                    "failed to fetch current release version: timed out"
+                )
+                return
 
-        base_url = "https://github.com/kbidlack/proxhy/releases/tag/v{}"
+        base_url = "https://github.com/proxhyhq/proxhy/releases/tag/v{}"
         current_url = base_url.format(current)
         latest_url = base_url.format(latest)
 
@@ -613,7 +642,7 @@ class LoginPlugin:
                     TextComponent("README")
                     .click_event(
                         "open_url",
-                        "https://github.com/kbidlack/proxhy?tab=readme-ov-file#upgrading",
+                        "https://github.com/proxhyhq/proxhy?tab=readme-ov-file#upgrading",
                     )
                     .hover_text(
                         TextComponent("Open the README on GitHub").color("yellow")

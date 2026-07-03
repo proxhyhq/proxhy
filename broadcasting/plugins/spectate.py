@@ -1,8 +1,9 @@
 import asyncio
 import random
-from typing import TYPE_CHECKING, Literal, Optional, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import hypixel
+import numba
 import numpy as np
 
 from gamestate.state import Entity, Player, PlayerAbilityFlags, Rotation, Vec3d
@@ -35,19 +36,22 @@ if TYPE_CHECKING:
     from broadcasting.plugin import BroadcastPeerPlugin
 
 
-def compute_look(camera_pos: Vec3d, object_pos: Vec3d):
+@numba.njit(cache=True, fastmath=True)
+def compute_look(
+    cx: float, cy: float, cz: float, ox: float, oy: float, oz: float
+) -> tuple[float, float]:
     delta = np.array(
         [
-            object_pos.x - camera_pos.x,
-            object_pos.y - camera_pos.y,
-            object_pos.z - camera_pos.z,
+            ox - cx,
+            oy - cy,
+            oz - cz,
         ],
         dtype=np.float64,
     )
 
     dx, dy, dz = delta
 
-    r = np.linalg.norm(delta)
+    r = np.sqrt(dx**2 + dy**2 + dz**2)
 
     # yaw: xz-plane, starts at (0, +Z), ccw, degrees
     yaw = -np.degrees(np.arctan2(dx, dz))
@@ -55,7 +59,7 @@ def compute_look(camera_pos: Vec3d, object_pos: Vec3d):
 
     pitch = -np.degrees(np.arcsin(dy / r))
 
-    return Rotation(yaw, pitch)
+    return float(yaw), float(pitch)
 
 
 class BroadcastPeerSpectatePlugin:
@@ -126,7 +130,15 @@ class BroadcastPeerSpectatePlugin:
         relative_position = Vec3d(2, 2, 2)
         position = self.proxy.gamestate.position + relative_position
 
-        rotation = compute_look(position, self.proxy.gamestate.position)
+        yaw, pitch = compute_look(
+            position.x,
+            position.y,
+            position.z,
+            self.proxy.gamestate.position.x,
+            self.proxy.gamestate.position.y + 1,  # to look closer to head
+            self.proxy.gamestate.position.z,
+        )
+        rotation = Rotation(yaw, pitch)
         return position, rotation
 
     async def _update_spec_task(self: BroadcastPeerPlugin):
@@ -332,9 +344,9 @@ class PlayerSpectateWindow(Window):
         self.proxy = proxy
         self.entity = entity
 
-        self.health: Optional[float] = None
+        self.health: float | None = None
         self.display_name: str = self.entity.name
-        self.player: Optional[hypixel.Player] = None
+        self.player: hypixel.Player | None = None
 
         super().__init__(
             proxy=self.proxy,
@@ -375,6 +387,7 @@ class PlayerSpectateWindow(Window):
                     )
                 ),
             ),
+            callback=self._ender_pearl_callback,
         )
         self.proxy.create_task(self._update_slots())
 
@@ -477,3 +490,15 @@ class PlayerSpectateWindow(Window):
     ):
         self.close()
         self.proxy._spectate(self.entity.entity_id)
+
+    async def _ender_pearl_callback(
+        self,
+        window: Window,
+        slot: int,
+        button: int,
+        action_num: int,
+        mode: int,
+        clicked_item: SlotData,
+    ):
+        self.close()
+        await self.proxy._command_watch()

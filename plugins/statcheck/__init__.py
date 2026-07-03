@@ -1,11 +1,14 @@
 import asyncio
+import builtins
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, TypeIs, get_args
+from typing import TYPE_CHECKING, Any, Literal, TypeIs, get_args
 
+import hypixel
 import keyring
 from hypixel import (
     ApiError,
@@ -136,13 +139,13 @@ def is_team_letter(letter: str) -> TypeIs[TeamLetter]:
     return letter in set(get_args(TeamLetter))
 
 
-def match_team_name(name: str) -> Optional[TeamName]:
+def match_team_name(name: str) -> TeamName | None:
     m = TEAM_COLOR_NAME.fullmatch(name)
     if m is not None:
         return REMOVE_DIGITS.sub("", m.group())  # type: ignore
 
 
-def match_player_color(username: str, msg: str) -> Optional[TeamColorCode]:
+def match_player_color(username: str, msg: str) -> TeamColorCode | None:
     m = re.search(rf"(§.){username}", msg)
     if m is not None:
         return m.group(1)  # type: ignore
@@ -234,7 +237,7 @@ class GamePlayer:
     status: GamePlayerStatus
     respawn_time: int
 
-    respawn_timer_task: Optional[asyncio.Task] = field(init=False)
+    respawn_timer_task: asyncio.Task | None = field(init=False)
     offline_uuid: uuid.UUID = field(init=False)
 
     def __post_init__(self):
@@ -270,7 +273,7 @@ class StatCheckPlugin:
         self._api_key_valid: bool | None = None
 
         # _update_stats
-        self.player_stats_task: Optional[asyncio.Task[None]] = None
+        self.player_stats_task: asyncio.Task[None] | None = None
         # list of tasks spawned by _update_player_stats
         self.player_stats_tasks: list[asyncio.Task[None]] = list()
         # players from /who
@@ -364,7 +367,7 @@ class StatCheckPlugin:
         try:
             await self.hypixel_client.player_count()
             self._api_key_valid = True
-        except InvalidApiKey, KeyRequired:
+        except InvalidApiKey, KeyRequired, MalformedApiKey:
             self._api_key_valid = False
 
         return self._api_key_valid
@@ -494,11 +497,7 @@ class StatCheckPlugin:
     ):
         if data == ["OFF", "ON"]:
             if not await self.validate_api_key():
-                self.downstream.chat(
-                    TextComponent(
-                        "Invalid Hypixel API Key; will not be able to refresh stats in tab!"
-                    ).color("red")
-                )
+                await self.send_api_key_err()
 
         self._rebuild_display_names()
 
@@ -660,11 +659,10 @@ class StatCheckPlugin:
             RateLimitError,
             TimeoutError,
             KeyRequired,
-            asyncio.TimeoutError,
             ApiError,
         ) as err:
             err_messages: dict[type, TextComponent] = {
-                InvalidApiKey: TextComponent("Invalid API Key!").color("red"),
+                InvalidApiKey: self.get_api_key_err(),
                 KeyRequired: TextComponent("No API Key provided!").color("red"),
                 RateLimitError: TextComponent("Rate limit!").color("red"),
                 TimeoutError: TextComponent(
@@ -693,10 +691,15 @@ class StatCheckPlugin:
                     self.logger.debug(
                         f"retrying {player.username} for {type(err)}; try #{try_n}"
                     )
-                    self.downstream.chat(f"{err_message} Retrying... (#{try_n})")
+                    self.downstream.chat(
+                        TextComponent(f"{err_message} Retrying... (#{try_n})").color(
+                            "red"
+                        )
+                    )
                     try_n += 1
                 else:
-                    return self.downstream.chat(err_message)
+                    self.logger.debug(f"gave up on {player.username} for {type(err)}")
+                    return self.downstream.chat(TextComponent(err_message).color("red"))
 
             self.player_stats_queue.put_nowait((player, try_n))
 
@@ -773,7 +776,7 @@ class StatCheckPlugin:
 
         try:
             await asyncio.wait_for(self.who_players_statted.wait(), timeout=15)
-        except asyncio.TimeoutError:
+        except builtins.TimeoutError:
             return
 
         if self.game.map is None:
@@ -1061,18 +1064,7 @@ class StatCheckPlugin:
             m = JOIN_RE.match(message)
             if m and m.group("ign").casefold() == self.nick_or_username.casefold():
                 if not await self.validate_api_key():
-                    self.downstream.chat(
-                        TextComponent("Invalid API key! ")
-                        .color("red")
-                        .append(
-                            TextComponent("(developer.hypixel.net)")
-                            .underlined()
-                            .click_event(
-                                "open_url", "https://developer.hypixel.net/dashboard/"
-                            )
-                            .color("gray")
-                        )
-                    )
+                    await self.send_api_key_err()
 
     @subscribe("chat:server:ONLINE: .*")
     async def _statcheck_event_chat_server_who(
@@ -1198,23 +1190,22 @@ class StatCheckPlugin:
             else:
                 raise CommandException("You have not set your Hypixel API key yet!")
 
+        test_client = hypixel.Client(key, cache_h=False, cache_m=False)
         try:
-            self.hypixel_client.remove_key(self.hypixel_api_key)
-            self.hypixel_client.add_key(key)
-            # hypixel.Client.validate_keys does not work anymore
-            await self.validate_api_key()
-        except MalformedApiKey, InvalidApiKey:
-            self.hypixel_client.remove_key(key)
-            self.hypixel_client.add_key(self.hypixel_api_key)
-            raise CommandException("Invalid API Key!")
+            await test_client.player_count()
+        except InvalidApiKey, KeyRequired, MalformedApiKey:
+            raise CommandException(self.get_api_key_err())
+        finally:
+            await test_client.close()
 
+        self.hypixel_client.remove_key(self.hypixel_api_key)
+        self.hypixel_client.add_key(key)
         self.hypixel_api_key = key
         self._api_key_valid = True
-
         self.game_error = None
         self.downstream.chat(TextComponent("Updated API Key!").color("green"))
 
-    def match_kill_message(self: ProxhyPlugin, message: str) -> Optional[re.Match]:
+    def match_kill_message(self: ProxhyPlugin, message: str) -> re.Match | None:
         """Match a kill message against known patterns.
 
         Returns:
