@@ -64,6 +64,8 @@ class BoundariesPlugin:
         # developer flag to enable features that make it
         # easier to get the boundary positions on new maps
         self.log_boundaries = True
+        self.log_generators = True
+        self.output_generator_logs = True
         self.teams_populated = False
 
         # corners relative to spawn position
@@ -77,7 +79,8 @@ class BoundariesPlugin:
         # how often should we check for nearby generators (in seconds)
         self.GEN_CHECK_TIME = 15
 
-        self.create_task(self.loop_gen_check())
+        if self.log_generators:
+            self.create_task(self.loop_gen_check())
 
     @subscribe(r"chat:server:The game starts in 1 second!")
     async def received_game_start_chat(self: ProxhyPlugin, match, buff: Buffer):
@@ -230,10 +233,18 @@ class BoundariesPlugin:
             self.entities_teleported[entity.name] = (x, y, z, yaw)
 
     def _save_bedwars_map_data(self: ProxhyPlugin) -> None:
-        """Writes map data to bedwars_maps.json"""
         maps_path = Path(__file__).resolve().parents[1] / "assets" / "bedwars_maps.json"
         with maps_path.open("w", encoding="utf-8") as f:
-            json.dump(BW_MAPS, f, ensure_ascii=False, indent=4, sort_keys=True)
+            f.write("{\n")
+            items = sorted(BW_MAPS.items())
+            for index, (map_name, map_data) in enumerate(items):
+                comma = "," if index < len(items) - 1 else ""
+                f.write(
+                    f"  {json.dumps(map_name, ensure_ascii=False)}: "
+                    f"{json.dumps(map_data, ensure_ascii=False, separators=(',', ': '))}"
+                    f"{comma}\n"
+                )
+            f.write("}\n")
 
     @listen_server(0x08, blocking=True)  # player move and look packet
     async def read_own_spawnpoint(self: ProxhyPlugin, buff: Buffer):
@@ -670,19 +681,21 @@ class BoundariesPlugin:
             if "diamond" in name_text.casefold():
                 updated = True
                 self.map_data["generators"]["diamond"].append(pos_list)
-                self.logger.log(
-                    20,
-                    f"Wrote new diamond generator for {self.game.map.name.upper()} at {pos_list}.",
-                )
+                if self.output_generator_logs:
+                    self.logger.log(
+                        20,
+                        f"Wrote new diamond generator for {self.game.map.name.upper()} at {pos_list}.",
+                    )
                 # print(f"Found diamond gen at {pos_list}")
 
             elif "emerald" in name_text.casefold():
                 updated = True
                 self.map_data["generators"]["emerald"].append(pos_list)
-                self.logger.log(
-                    20,
-                    f"Wrote new emerald generator for {self.game.map.name.upper()} at {pos_list}.",
-                )
+                if self.output_generator_logs:
+                    self.logger.log(
+                        20,
+                        f"Wrote new emerald generator for {self.game.map.name.upper()} at {pos_list}.",
+                    )
                 # print(f"Found emerald gen at {pos_list}")
         if updated:
             if len(self.map_data["generators"]["emerald"]) > 4:
@@ -692,6 +705,23 @@ class BoundariesPlugin:
             if len(self.map_data["generators"]["diamond"]) > 4:
                 self.logger.warning(
                     f">4 diamond gens: {self.map_data['generators']['diamond']}"
+                )
+            if (
+                len(self.map_data["generators"]["diamond"]) == 4
+                and len(self.map_data["generators"]["emerald"]) == 4
+            ):
+                self.downstream.chat(
+                    TextComponent(
+                        "Successfully logged 4 diamond generators and 4 emerald generators for map "
+                    )
+                    .color("green")
+                    .bold(False)
+                    .append(
+                        TextComponent(self.game.map.name.upper())
+                        .color("yellow")
+                        .bold()
+                        .append(TextComponent(".").color("green").bold(False))
+                    )
                 )
             self._save_bedwars_map_data()
         # else:
