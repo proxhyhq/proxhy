@@ -1,6 +1,10 @@
 """
 Outline boundaries for "You can't place blocks here!"
 regions around bases and diamond/emerald generators.
+
+Implements many data collection pipelines, since
+these bounding boxes are not easily exposed to the
+client.
 """
 
 import asyncio
@@ -70,6 +74,11 @@ class BoundariesPlugin:
         # window in which to consider the "you can't place blocks here!" chat msg as being recent
         self.CPB_WINDOW = 0.2
 
+        # how often should we check for nearby generators (in seconds)
+        self.GEN_CHECK_TIME = 15
+
+        self.create_task(self.loop_gen_check())
+
     @subscribe(r"chat:server:The game starts in 1 second!")
     async def received_game_start_chat(self: ProxhyPlugin, match, buff: Buffer):
         self.downstream.send_packet(0x02, buff.getvalue())
@@ -94,6 +103,10 @@ class BoundariesPlugin:
                 if corner1 and corner2 and len(corner1) == 3 and len(corner2) == 3:
                     self.boundary_corner_1 = Pos(*corner1)
                     self.boundary_corner_2 = Pos(*corner2)
+
+            self.map_data.setdefault("generators", {})
+            self.map_data["generators"].setdefault("emerald", [])
+            self.map_data["generators"].setdefault("diamond", [])
         except KeyError:
             self.logger.warning(f"Unknown map: '{self.game.map.name}'")
             return
@@ -487,7 +500,7 @@ class BoundariesPlugin:
     async def block_changed(self: ProxhyPlugin, buff: Buffer):
         self.downstream.send_packet(0x23, buff.getvalue())
         if self.log_boundaries and self.game.gametype == "bedwars":
-            asyncio.create_task(self._block_changed(buff))
+            self.create_task(self._block_changed(buff))
 
     # rest of method shouldn't be blocking as it includes an asyncio.sleep call downstream
     async def _block_changed(self: ProxhyPlugin, buff: Buffer):
@@ -502,7 +515,7 @@ class BoundariesPlugin:
         self.downstream.send_packet(0x22, buff.getvalue())
 
         if self.log_boundaries and self.game.gametype == "bedwars":
-            asyncio.create_task(self._block_changed(buff))
+            self.create_task(self._block_changed(buff))
 
     # rest of method shouldn't be blocking as it includes an asyncio.sleep call downstream
     async def _multi_block_change(self: ProxhyPlugin, buff: Buffer):
@@ -603,48 +616,86 @@ class BoundariesPlugin:
             self.logger.exception(f"Failed to write {maps_path}: {e}")
             self.downstream.chat("Could not save boundary! See output log.")
 
-    @command("testgen")
-    async def testgen(self):
-        # TEMPORARY FUNCTION!! REMOVE
-        self.get_gen_positions()
+    @command("gencheck")
+    async def manual_generator_check(self: ProxhyPlugin) -> None:
+        """manually update generator positions"""
+        if self.game.gametype != "bedwars" or not hasattr(self, "map_data"):
+            return
 
-    def get_gen_positions(self) -> dict[Literal["diamond", "emerald"], set[Vec3d]]:
+        # it's maybe possible but unlikely we haven't initialized these yet
+        self.map_data.setdefault("generators", {})
+        self.map_data["generators"].setdefault("emerald", [])
+        self.map_data["generators"].setdefault("diamond", [])
+        self.update_gen_positions()
+
+    async def loop_gen_check(self: ProxhyPlugin):
+        while True:
+            await asyncio.sleep(self.GEN_CHECK_TIME)
+            # print("Looping...")
+            if self.game.gametype != "bedwars" or not hasattr(self, "map_data"):
+                continue
+            self.update_gen_positions()
+
+    def update_gen_positions(self: ProxhyPlugin):
         """
         Returns a dict of currently loaded diamond/emerald
-        generator positions.
+        generator positions, sourced through proxhy gamestate.
         """
-        gen_positions: dict[Literal["diamond", "emerald"], set[Vec3d]] = {
-            "emerald": set(),
-            "diamond": set(),
-        }
-        print(f"{len(self.gamestate.entities)} entities.")
-        names = []
+        if self.game.map is None:
+            self.logger.warning("self.game.map is None")
+            return
+
+        updated = False
         for entity in self.gamestate.entities.values():
+            pos_list = [entity.position.x, entity.position.y, entity.position.z]
+
             # filter armor stands
             if entity.entity_type != 78:
                 continue
 
+            # if we've already tracked this position
+            if (
+                pos_list in self.map_data["generators"]["diamond"]
+                or pos_list in self.map_data["generators"]["emerald"]
+            ):
+                continue
+
             name_meta = entity.metadata.get(2)  # custom name in entity metadata
             if name_meta is None:
-                # this essentially doesn't happen
+                # this essentially doesn't happen but it makes type checker happy
                 continue
 
             name_text = str(name_meta.value)
 
-            names.append(name_text)
-
             if "diamond" in name_text.casefold():
-                gen_positions["diamond"].add(entity.position)
-                print(
-                    f"Found diamond gen at {entity.position.x}, {entity.position.y}, {entity.position.z}"
+                updated = True
+                self.map_data["generators"]["diamond"].append(pos_list)
+                self.logger.log(
+                    20,
+                    f"Wrote new diamond generator for {self.game.map.name.upper()} at {pos_list}.",
                 )
-            elif "emerald" in name_text.casefold():
-                print(
-                    f"Found emerald gen at {entity.position.x}, {entity.position.y}, {entity.position.z}"
-                )
-                gen_positions["emerald"].add(entity.position)
+                # print(f"Found diamond gen at {pos_list}")
 
-        return gen_positions
+            elif "emerald" in name_text.casefold():
+                updated = True
+                self.map_data["generators"]["emerald"].append(pos_list)
+                self.logger.log(
+                    20,
+                    f"Wrote new emerald generator for {self.game.map.name.upper()} at {pos_list}.",
+                )
+                # print(f"Found emerald gen at {pos_list}")
+        if updated:
+            if len(self.map_data["generators"]["emerald"]) > 4:
+                self.logger.warning(
+                    f">4 emerald gens: {self.map_data['generators']['emerald']}"
+                )
+            if len(self.map_data["generators"]["diamond"]) > 4:
+                self.logger.warning(
+                    f">4 diamond gens: {self.map_data['generators']['diamond']}"
+                )
+            self._save_bedwars_map_data()
+        # else:
+        # print("Did not find generators.")
 
     async def place_boundary(
         self: ProxhyPlugin,
