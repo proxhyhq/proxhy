@@ -55,6 +55,9 @@ class Vec3d:
             return True
         return self.x != other.x or self.y != other.y or self.z != other.z
 
+    def __hash__(self) -> int:
+        return hash((self.x, self.y, self.z))
+
     def copy(self) -> Vec3d:
         return Vec3d(self.x, self.y, self.z)
 

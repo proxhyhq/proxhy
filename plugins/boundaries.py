@@ -3,36 +3,36 @@ Outline boundaries for "You can't place blocks here!"
 regions around bases and diamond/emerald generators.
 """
 
-from plugins.commands import command
-from typing import overload, cast
-from petty.events import listen_server, subscribe, listen_client
+import asyncio
+import json
+import time
+from collections import deque
+from pathlib import Path
+
+# from plugins.commands import command
+from typing import TYPE_CHECKING, Literal, cast, overload
+
+from gamestate.models import Player, Vec3d
+from gamestate.state import GameState
+from petty.events import listen_client, listen_server, subscribe
 from petty.protocol.datatypes import (
     Angle,
     Buffer,
-    Double,
-    VarInt,
-    Int,
-    Short,
-    UnsignedByte,
-    Float,
-    Position,
-    Slot,
     Byte,
+    Double,
+    Float,
+    Int,
     Pos,
+    Position,
+    Short,
+    Slot,
+    TextComponent,
+    UnsignedByte,
+    VarInt,
 )
-
+from plugins.commands import command
+from plugins.statcheck import BW_MAPS, GamePlayer
 from proxhy.utils import uuid_version
-from gamestate.models import Player
-from gamestate.state import GameState
-from plugins.statcheck import GamePlayer, BW_MAPS
-# from plugins.commands import command
-
-from typing import Literal, TYPE_CHECKING
-
-from collections import deque
-
-import time
-import asyncio
 
 if TYPE_CHECKING:
     from proxhy.plugin import ProxhyPlugin
@@ -87,6 +87,13 @@ class BoundariesPlugin:
 
         try:
             self.map_data: dict = BW_MAPS[self.game.map.name]
+            boundary = self.map_data.get("boundary")
+            if boundary:
+                corner1 = boundary.get("corner1")
+                corner2 = boundary.get("corner2")
+                if corner1 and corner2 and len(corner1) == 3 and len(corner2) == 3:
+                    self.boundary_corner_1 = Pos(*corner1)
+                    self.boundary_corner_2 = Pos(*corner2)
         except KeyError:
             self.logger.warning(f"Unknown map: '{self.game.map.name}'")
             return
@@ -110,7 +117,6 @@ class BoundariesPlugin:
 
     @subscribe("statcheck:all_players_statted")
     async def teams_now_populated(self: ProxhyPlugin, *_):
-
         self.teams_populated = True
 
         if len(self.entities_teleported.keys()) == 0:
@@ -148,13 +154,17 @@ class BoundariesPlugin:
 
         if self.map_data.get("spawnpoints") is None:
             self.map_data["spawnpoints"] = {}
-        if team_count > len(self.map_data["spawnpoints"].keys()):
-            # we have NO spawnpoint data for this map or PARTIAL data
-            # overwrite existing entries because it's easier and in theory they shouldn't change
-            for team, spawnpoint in self.team_spawnpoints.items():
-                self.map_data["spawnpoints"][team] = spawnpoint
 
-        print(f"Filtered spawnpoints: {self.team_spawnpoints}")
+        saved_spawnpoints = self.map_data["spawnpoints"]
+        added_spawnpoint = False
+        for team, spawnpoint in self.team_spawnpoints.items():
+            if team in saved_spawnpoints:
+                continue
+            saved_spawnpoints[team] = spawnpoint
+            added_spawnpoint = True
+
+        if added_spawnpoint:
+            self._save_bedwars_map_data()
 
     def validate_yaw(
         self: ProxhyPlugin, yaw: int | float, snap=True
@@ -206,6 +216,12 @@ class BoundariesPlugin:
 
             self.entities_teleported[entity.name] = (x, y, z, yaw)
 
+    def _save_bedwars_map_data(self: ProxhyPlugin) -> None:
+        """Writes map data to bedwars_maps.json"""
+        maps_path = Path(__file__).resolve().parents[1] / "assets" / "bedwars_maps.json"
+        with maps_path.open("w", encoding="utf-8") as f:
+            json.dump(BW_MAPS, f, ensure_ascii=False, indent=4, sort_keys=True)
+
     @listen_server(0x08, blocking=True)  # player move and look packet
     async def read_own_spawnpoint(self: ProxhyPlugin, buff: Buffer):
         self.downstream.send_packet(0x08, buff.getvalue())
@@ -232,7 +248,6 @@ class BoundariesPlugin:
         self.cpb_event.set()
         await asyncio.sleep(self.CPB_WINDOW)  # yield to the event loop
         if self.cpb_event.is_set():
-            print("Clearing event!")
             # might've gotten cleared in that sleep window
             self.cpb_event.clear()
 
@@ -340,7 +355,6 @@ class BoundariesPlugin:
         # TODO: debug why it only works on some maps
         #   - known debug: this method is still getting called for those maps, not sure where it's exiting early tho
         #   - known debug: own spawnpoint WAS logged during these trials, so nearest spawnpoint is valid
-        # TODO: debug why using magic toystick updates boundary despite not getting a "you can't place blocks here" msg
         if self.map_data.get("spawnpoints") is None:
             if self.game.map is not None:
                 self.logger.warning(
@@ -377,8 +391,8 @@ class BoundariesPlugin:
         spawn_x = int(self.map_data["spawnpoints"][closest_team][0])
         spawn_y = int(self.map_data["spawnpoints"][closest_team][1])
         spawn_z = int(self.map_data["spawnpoints"][closest_team][2])
-        yaw = self.validate_yaw((self.map_data["spawnpoints"][closest_team][3]))
-        if yaw:
+        yaw = self.validate_yaw(self.map_data["spawnpoints"][closest_team][3])
+        if yaw is not None:
             rel_pos = self.get_relative_pos_yaw(
                 pos, Pos(spawn_x, spawn_y, spawn_z), yaw
             )
@@ -438,9 +452,6 @@ class BoundariesPlugin:
 
             self.downstream.chat(msg)
 
-        # TODO: implement /saveboundary command that saves the newly expanded boundary to
-        # the map data json file so we can start placing the boundaries on the edges of the build limit
-
     async def try_update_boundary(self: ProxhyPlugin, block_deleted: int, pos: Pos):
         """
         Called when a block was deleted; checks if it's a 'You can't place blocks
@@ -458,9 +469,8 @@ class BoundariesPlugin:
         try:
             await asyncio.wait_for(self.cpb_event.wait(), timeout=self.CPB_WINDOW)
             self.update_boundary_size(block_deleted, pos)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # assume block got deleted for a different reason
-            print("Did not receive CPB message!")
             pass
 
     async def handle_block_removal(self: ProxhyPlugin, block_id: int, pos: Pos) -> None:
@@ -476,38 +486,165 @@ class BoundariesPlugin:
     @listen_server(0x23, blocking=True)
     async def block_changed(self: ProxhyPlugin, buff: Buffer):
         self.downstream.send_packet(0x23, buff.getvalue())
-
         if self.log_boundaries and self.game.gametype == "bedwars":
-            pos = buff.unpack(Position)
-            block_id = buff.unpack(VarInt)
-            block_type = block_id >> 4
+            asyncio.create_task(self._block_changed(buff))
 
-            await self.handle_block_removal(block_type, pos)
+    # rest of method shouldn't be blocking as it includes an asyncio.sleep call downstream
+    async def _block_changed(self: ProxhyPlugin, buff: Buffer):
+        pos = buff.unpack(Position)
+        block_id = buff.unpack(VarInt)
+        block_type = block_id >> 4
+
+        await self.handle_block_removal(block_type, pos)
 
     @listen_server(0x22, blocking=True)
     async def multi_block_change(self: ProxhyPlugin, buff: Buffer):
         self.downstream.send_packet(0x22, buff.getvalue())
 
         if self.log_boundaries and self.game.gametype == "bedwars":
-            chunk_x, chunk_z = buff.unpack(Int), buff.unpack(Int)
-            record_count = buff.unpack(VarInt)
+            asyncio.create_task(self._block_changed(buff))
 
-            for b in range(record_count):
-                xz_pos = buff.unpack(UnsignedByte)
-                y = buff.unpack(UnsignedByte)
+    # rest of method shouldn't be blocking as it includes an asyncio.sleep call downstream
+    async def _multi_block_change(self: ProxhyPlugin, buff: Buffer):
+        chunk_x, chunk_z = buff.unpack(Int), buff.unpack(Int)
+        record_count = buff.unpack(VarInt)
 
-                rel_x_pos = (0xF0 & xz_pos) >> 4
-                rel_z_pos = 0x0F & xz_pos
+        for _ in range(record_count):
+            xz_pos = buff.unpack(UnsignedByte)
+            y = buff.unpack(UnsignedByte)
 
-                x = chunk_x * 16 + rel_x_pos
-                z = chunk_z * 16 + rel_z_pos
+            rel_x_pos = (0xF0 & xz_pos) >> 4
+            rel_z_pos = 0x0F & xz_pos
 
-                block_id = buff.unpack(VarInt)
+            x = chunk_x * 16 + rel_x_pos
+            z = chunk_z * 16 + rel_z_pos
 
-                await self.handle_block_removal(block_id, Pos(x, y, z))
+            block_id = buff.unpack(VarInt)
 
-    # @command("saveboundary")
-    # async def save_boundary(self: ProxhyPlugin):
+            await self.handle_block_removal(block_id, Pos(x, y, z))
+
+    @command("saveboundary")
+    async def save_boundary(self: ProxhyPlugin):
+        if self.game.gametype != "bedwars":
+            self.downstream.chat("This command can only be used in a Bedwars game!")
+            return
+
+        if self.boundary_corner_1 == Pos(0, 0, 0) == self.boundary_corner_2:
+            self.downstream.chat("Boundary is not updated yet! Aborting...")
+            return
+
+        if self.game.map is None:
+            self.logger.warning("self.game.map is None")
+            return
+
+        if not hasattr(self, "map_data"):
+            self.logger.warning("No map data loaded for the current map.")
+            return
+
+        corner1 = [
+            self.boundary_corner_1.x,
+            self.boundary_corner_1.y,
+            self.boundary_corner_1.z,
+        ]
+        corner2 = [
+            self.boundary_corner_2.x,
+            self.boundary_corner_2.y,
+            self.boundary_corner_2.z,
+        ]
+
+        prev: dict[str, list[int]] | None = self.map_data.get("boundary")
+        if prev is None:
+            prev_tc = TextComponent("None").color("red")
+        else:
+            prev_tc = TextComponent(f"{prev['corner1']} -> {prev['corner2']}")
+
+        self.map_data.setdefault("boundary", {})
+        self.map_data["boundary"]["corner1"] = corner1
+        self.map_data["boundary"]["corner2"] = corner2
+
+        self.logger.info(
+            f"Saved boundary for {self.game.map.name}: {corner1} -> {corner2}"
+        )
+
+        maps_path = Path(__file__).resolve().parents[1] / "assets" / "bedwars_maps.json"
+
+        try:
+            with maps_path.open("w", encoding="utf-8") as f:
+                json.dump(BW_MAPS, f, ensure_ascii=False, indent=4, sort_keys=True)
+            msg_saved = (
+                TextComponent("Saved boundary for ")
+                .bold(False)
+                .append(self.game.map.name.capitalize())
+                .bold(True)
+                .append(".")
+                .bold(False)
+            )
+            msg_old = TextComponent("Old Boundary: ").append(prev_tc)
+            msg_new = (
+                TextComponent("New Boundary: ")
+                .color("white")
+                .append(TextComponent(corner1))
+                .color("yellow")
+                .append(TextComponent(" -> "))
+                .color("white")
+                .append(TextComponent(corner2))
+                .color("yellow")
+            )
+            self.downstream.chat(
+                TextComponent("\n")
+                .append(msg_saved)
+                .append("\n")
+                .append(msg_old)
+                .append("\n")
+                .append(msg_new)
+                .append("\n")
+            )
+        except OSError as e:
+            self.logger.exception(f"Failed to write {maps_path}: {e}")
+            self.downstream.chat("Could not save boundary! See output log.")
+
+    @command("testgen")
+    async def testgen(self):
+        # TEMPORARY FUNCTION!! REMOVE
+        self.get_gen_positions()
+
+    def get_gen_positions(self) -> dict[Literal["diamond", "emerald"], set[Vec3d]]:
+        """
+        Returns a dict of currently loaded diamond/emerald
+        generator positions.
+        """
+        gen_positions: dict[Literal["diamond", "emerald"], set[Vec3d]] = {
+            "emerald": set(),
+            "diamond": set(),
+        }
+        print(f"{len(self.gamestate.entities)} entities.")
+        names = []
+        for entity in self.gamestate.entities.values():
+            # filter armor stands
+            if entity.entity_type != 78:
+                continue
+
+            name_meta = entity.metadata.get(2)  # custom name in entity metadata
+            if name_meta is None:
+                # this essentially doesn't happen
+                continue
+
+            name_text = str(name_meta.value)
+
+            names.append(name_text)
+
+            if "diamond" in name_text.casefold():
+                gen_positions["diamond"].add(entity.position)
+                print(
+                    f"Found diamond gen at {entity.position.x}, {entity.position.y}, {entity.position.z}"
+                )
+            elif "emerald" in name_text.casefold():
+                print(
+                    f"Found emerald gen at {entity.position.x}, {entity.position.y}, {entity.position.z}"
+                )
+                gen_positions["emerald"].add(entity.position)
+
+        return gen_positions
 
     async def place_boundary(
         self: ProxhyPlugin,
