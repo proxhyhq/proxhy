@@ -58,9 +58,6 @@ class Vec3d:
     def __hash__(self) -> int:
         return hash((self.x, self.y, self.z))
 
-    def __str__(self) -> str:
-        return f"({str(self.x)}, {str(self.y)}, {str(self.z)})"
-
     def copy(self) -> Vec3d:
         return Vec3d(self.x, self.y, self.z)
 
