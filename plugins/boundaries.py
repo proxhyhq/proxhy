@@ -77,7 +77,7 @@ class BoundariesPlugin:
         self.CPB_WINDOW = 0.2
 
         # how often should we check for nearby generators (in seconds)
-        self.GEN_CHECK_TIME = 15
+        self.GEN_CHECK_TIME = 1
 
         if self.log_generators:
             self.create_task(self.loop_gen_check())
@@ -643,7 +643,11 @@ class BoundariesPlugin:
         while True:
             await asyncio.sleep(self.GEN_CHECK_TIME)
             # print("Looping...")
-            if self.game.gametype != "bedwars" or not hasattr(self, "map_data"):
+            if (
+                not self.game.started
+                or self.game.gametype != "bedwars"
+                or not hasattr(self, "map_data")
+            ):
                 continue
             self.update_gen_positions()
 

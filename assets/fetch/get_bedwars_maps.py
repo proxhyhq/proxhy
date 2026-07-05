@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup, Tag
 from tqdm import tqdm
 
 BASE = "https://hypixel.fandom.com"
-CATEGORY_URL = "https://hypixel.fandom.com/wiki/Category:Bed_Wars_maps"
+CATEGORY_URL = "https://hypixel.fandom.com/wiki/Bed_Wars/Maps"
 OUTPUT_PATH = r"assets\new_maps.json"
 
 
