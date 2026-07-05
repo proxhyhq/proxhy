@@ -66,6 +66,10 @@ class BoundariesPlugin:
         self.log_boundaries = True
         self.log_generators = True
         self.output_generator_logs = True
+
+        # chat notifications for developer data collection pipelines
+        self.send_chat_notifs = True
+
         self.teams_populated = False
 
         # corners relative to spawn position
@@ -172,14 +176,14 @@ class BoundariesPlugin:
             self.map_data["spawnpoints"] = {}
 
         saved_spawnpoints = self.map_data["spawnpoints"]
-        added_spawnpoint = False
+        spawnpoints_added = 0
         for team, spawnpoint in self.team_spawnpoints.items():
             if team in saved_spawnpoints:
                 continue
             saved_spawnpoints[team] = spawnpoint
-            added_spawnpoint = True
+            spawnpoints_added += 1
 
-        if added_spawnpoint:
+        if spawnpoints_added > 0:
             self._save_bedwars_map_data()
 
     def validate_yaw(
@@ -462,19 +466,17 @@ class BoundariesPlugin:
                     self.boundary_corner_2.z = rel_pos.z
             new_boundary = self._get_boundary()
 
-            def fmt_val(old, new):
-                return f"§e{new}§r" if new != old else str(new)
+            if self.send_chat_notifs:
 
-            p, n = prev_boundary, new_boundary
-            bc1 = (
-                f"({fmt_val(p[0], n[0])}, {fmt_val(p[1], n[1])}, {fmt_val(p[2], n[2])})"
-            )
-            bc2 = (
-                f"({fmt_val(p[3], n[3])}, {fmt_val(p[4], n[4])}, {fmt_val(p[5], n[5])})"
-            )
-            msg = f"Boundary: {bc1}§r -> {bc2}§r"
+                def fmt_val(old, new):
+                    return f"§e{new}§r" if new != old else str(new)
 
-            self.downstream.chat(msg)
+                p, n = prev_boundary, new_boundary
+                bc1 = f"({fmt_val(p[0], n[0])}, {fmt_val(p[1], n[1])}, {fmt_val(p[2], n[2])})"
+                bc2 = f"({fmt_val(p[3], n[3])}, {fmt_val(p[4], n[4])}, {fmt_val(p[5], n[5])})"
+                msg = f"Boundary: {bc1}§r -> {bc2}§r"
+
+                self.downstream.chat(msg)
 
     async def try_update_boundary(self: ProxhyPlugin, block_deleted: int, pos: Pos):
         """
@@ -702,32 +704,38 @@ class BoundariesPlugin:
                     )
                 # print(f"Found emerald gen at {pos_list}")
         if updated:
-            if len(self.map_data["generators"]["emerald"]) > 4:
+            n_teams = self.get_bedwars_team_count()
+            n_emerald = 2 if n_teams in {2, 4} else 4
+            n_diamond = 4 if n_teams in {4, 8} else 2
+
+            self._save_bedwars_map_data()
+            if len(self.map_data["generators"]["emerald"]) > n_emerald:
                 self.logger.warning(
-                    f">4 emerald gens: {self.map_data['generators']['emerald']}"
+                    f">{n_emerald} emerald gens: {self.map_data['generators']['emerald']}"
                 )
-            if len(self.map_data["generators"]["diamond"]) > 4:
+            if len(self.map_data["generators"]["diamond"]) > n_diamond:
                 self.logger.warning(
-                    f">4 diamond gens: {self.map_data['generators']['diamond']}"
+                    f">{n_diamond} diamond gens: {self.map_data['generators']['diamond']}"
                 )
             if (
-                len(self.map_data["generators"]["diamond"]) == 4
-                and len(self.map_data["generators"]["emerald"]) == 4
+                len(self.map_data["generators"]["diamond"]) == n_diamond
+                and len(self.map_data["generators"]["emerald"]) == n_emerald
             ):
-                self.downstream.chat(
-                    TextComponent(
-                        "Successfully logged 4 diamond generators and 4 emerald generators for map "
+                if self.send_chat_notifs:
+                    self.downstream.chat(
+                        TextComponent(
+                            f"Successfully logged {n_diamond} diamond generators and {n_emerald} emerald generators for map "
+                        )
+                        .color("green")
+                        .bold(False)
+                        .append(
+                            TextComponent(self.game.map.name.upper())
+                            .color("yellow")
+                            .bold()
+                            .append(TextComponent(".").color("green").bold(False))
+                        )
                     )
-                    .color("green")
-                    .bold(False)
-                    .append(
-                        TextComponent(self.game.map.name.upper())
-                        .color("yellow")
-                        .bold()
-                        .append(TextComponent(".").color("green").bold(False))
-                    )
-                )
-            self._save_bedwars_map_data()
+
         # else:
         # print("Did not find generators.")
 
