@@ -954,6 +954,10 @@ class BoundaryRegion:
 
         for f in faces:
             segments = self._get_segments_on_face(*f)
+            linked = self._link_segments(segments)
+            # TODO: merge corners of all paths by checking [0] and [-1] indices of
+            # paths only on faces that intersect at corners
+            # you can use BoundarySegment.pos_eq or write an __eq__ method (maybe that's better actually)
 
     def _get_segments_on_face(
         self, n1_id: int, n2_id: int, n3_id: int, n4_id: int
@@ -1173,4 +1177,60 @@ class BoundaryRegion:
                 # made it through all paths; didn't find a path we belong to
                 paths.append(deque([s]))
 
-        return paths
+        # consolodate/merge all paths that quietly met up
+        merged = True
+        while merged:
+            merged = False
+            for path_index, path in enumerate(paths):
+                if not path:
+                    continue
+
+                for other_index, other_path in enumerate(paths):
+                    if path_index == other_index or not other_path:
+                        continue
+
+                    path_start = path[0]
+                    path_end = path[-1]
+                    other_start = other_path[0]
+                    other_end = other_path[-1]
+
+                    if any(
+                        other_start.pos_eq(pos)
+                        for pos in path_start.get_adjacent_voxels()
+                    ):
+                        while other_path:
+                            path.appendleft(other_path.popleft())
+                        merged = True
+                        break
+
+                    if any(
+                        other_end.pos_eq(pos)
+                        for pos in path_start.get_adjacent_voxels()
+                    ):
+                        while other_path:
+                            path.appendleft(other_path.pop())
+                        merged = True
+                        break
+
+                    if any(
+                        other_start.pos_eq(pos)
+                        for pos in path_end.get_adjacent_voxels()
+                    ):
+                        while other_path:
+                            path.append(other_path.popleft())
+                        merged = True
+                        break
+
+                    if any(
+                        other_end.pos_eq(pos) for pos in path_end.get_adjacent_voxels()
+                    ):
+                        while other_path:
+                            path.append(other_path.pop())
+                        merged = True
+                        break
+
+                if merged:
+                    break
+
+        # garbage cleanup: remove now-empty paths
+        return [path for path in paths if path]
