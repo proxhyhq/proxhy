@@ -862,16 +862,52 @@ class BoundarySegment(Pos):
         x: int,
         y: int,
         z: int,
-        dir: SegmentDirection,
+        direction: SegmentDirection,
         side: SegmentSide,
         type: BlockType,
         metadata: dict | None = None,
     ):
         super().__init__(x, y, z)
-        self.direction = dir
+        self.direction = direction
         self.side = side
         self.type = type
         self.metadata = metadata
+
+    def pos_eq(self, pos: Pos):
+        if self.x == pos.x and self.y == pos.y and self.z == pos.z:
+            return True
+        else:
+            return False
+
+    def get_adjacent_voxels(self):
+        """
+        Returns the eight positions adjacent & in line with direction:
+            In front + 1 above + 1 below
+            Behind + 1 above + 1 below
+            Directly above; directly below
+        """
+        if self.direction == SegmentDirection.X:
+            return [
+                Pos(self.x + 1, self.y, self.z),
+                Pos(self.x + 1, self.y + 1, self.z),
+                Pos(self.x + 1, self.y - 1, self.z),
+                Pos(self.x - 1, self.y, self.z),
+                Pos(self.x - 1, self.y + 1, self.z),
+                Pos(self.x - 1, self.y - 1, self.z),
+                Pos(self.x, self.y + 1, self.z),
+                Pos(self.x, self.y - 1, self.z),
+            ]
+        elif self.direction == SegmentDirection.Z:
+            return [
+                Pos(self.x, self.y, self.z + 1),
+                Pos(self.x, self.y + 1, self.z + 1),
+                Pos(self.x, self.y - 1, self.z + 1),
+                Pos(self.x, self.y, self.z - 1),
+                Pos(self.x, self.y + 1, self.z - 1),
+                Pos(self.x, self.y - 1, self.z - 1),
+                Pos(self.x, self.y + 1, self.z),
+                Pos(self.x, self.y - 1, self.z),
+            ]
 
 
 class BoundaryRegion:
@@ -893,7 +929,7 @@ class BoundaryRegion:
         self.gamestate = gamestate
 
     def validate_ids(self, ids: list[int]) -> None:
-        if any(0 > i > 7 for i in ids):
+        if not all(0 <= i <= 7 for i in ids):
             raise ValueError("Invalid id received; must be int literal 0 through 7.")
 
     def get_node(self, id: int) -> Pos:
@@ -908,7 +944,78 @@ class BoundaryRegion:
             out.append(self.nodes[id])
         return out
 
-    def analyze_block(self, x: int, y: int, z: int) -> dict:
+    def compute_boundary_segments(self):
+        min_x_face = [0, 1, 2, 3]
+        max_x_face = [4, 5, 6, 7]
+        min_y_face = [0, 1, 4, 5]
+        max_y_face = [2, 3, 6, 7]
+
+        faces = [min_x_face, max_x_face, min_y_face, max_y_face]
+
+        for f in faces:
+            segments = self._get_segments_on_face(*f)
+
+    def _get_segments_on_face(
+        self, n1_id: int, n2_id: int, n3_id: int, n4_id: int
+    ) -> list[BoundarySegment]:
+        """
+        Takes four nodes from self.nodes forming a cuboid face and returns the
+        position and direction (x vs z) of each boundary marker in that plane.
+        """
+        # TODO: current wip implementation only takes vertical planes.
+        # should it also accept xz planes for the top/bottom of the boundary?
+        # how would the boundary line work?
+
+        n1, n2, n3, n4 = self.get_nodes([n1_id, n2_id, n3_id, n4_id])
+
+        # get the id of a node on the opposing plane to check what side of
+        # the boundary this face is on
+        given_ids = {n1_id, n2_id, n3_id, n4_id}
+        all_ids = {0, 1, 2, 3, 4, 5, 6, 7}
+        an_unused_id = (all_ids - given_ids).pop()
+        opposite_node = self.get_node(an_unused_id)
+
+        if n1.z == n2.z == n3.z == n4.z:
+            direction = SegmentDirection.X
+            if n1.z > opposite_node.z:
+                side = SegmentSide.POSITIVE
+            else:
+                side = SegmentSide.NEGATIVE
+        elif n1.x == n2.x == n3.x == n4.x:
+            direction = SegmentDirection.Z
+            if n1.x > opposite_node.x:
+                side = SegmentSide.POSITIVE
+            else:
+                side = SegmentSide.NEGATIVE
+        else:
+            raise ValueError("Received nodes do not form a vertical plane.")
+
+        segments: list[BoundarySegment] = []
+
+        # don't need to check n4 because there are 2 sets of 2 y-coordinates in the 4 nodes
+        top = max(n1.y, n2.y, n3.y)
+        bottom = min(n1.y, n2.y, n3.y)
+
+        if direction == SegmentDirection.X:
+            right = max(n1.x, n2.x, n3.x)
+            left = min(n1.x, n2.x, n3.x)
+            self._scan_boundary_axis(
+                segments, direction, side, left, right, n1.z, top, bottom
+            )
+        elif direction == SegmentDirection.Z:
+            right = max(n1.z, n2.z, n3.z)
+            left = min(n1.z, n2.z, n3.z)
+            self._scan_boundary_axis(
+                segments, direction, side, left, right, n1.x, top, bottom
+            )
+        else:
+            raise ValueError(
+                f"Unknown direction {direction}; expected {SegmentDirection.X} or {SegmentDirection.Z}."
+            )
+
+        return segments
+
+    def _analyze_block(self, x: int, y: int, z: int) -> dict[str, Enum]:
         """
         Analyzes a block at the given world coordinates to determine its type and properties.
 
@@ -936,99 +1043,74 @@ class BoundaryRegion:
             return {"type": BlockType.SLAB}
         elif block_id in STAIR_IDS:
             out: dict[str, Enum] = {"type": BlockType.STAIR}
+
+            # append orientation and shape data lowest 2 bits (0x3) store the facing direction
+            facing_map = {
+                0: StairOrientation.EAST,
+                1: StairOrientation.WEST,
+                2: StairOrientation.SOUTH,
+                3: StairOrientation.NORTH,
+            }
+            orientation = facing_map.get(metadata & 0x3, StairOrientation.UNKNOWN)
+            # 3rd bit (0x4) indicates if stair is upside down (top half)
+            shape = StairShape.TOP_HALF if (metadata & 0x4) else StairShape.BOTTOM_HALF
+            out["orientation"] = orientation
+            out["shape"] = shape
+            return out
         else:
             return {"type": BlockType.SOLID}
 
-        # if we made it here, it's a stair; append orientation and shape data
-        # lowest 2 bits (0x3) store the facing direction
-        facing_map = {
-            0: StairOrientation.EAST,
-            1: StairOrientation.WEST,
-            2: StairOrientation.SOUTH,
-            3: StairOrientation.NORTH,
-        }
-        orientation = facing_map.get(metadata & 0x3, StairOrientation.UNKNOWN)
-        # 3rd bit (0x4) indicates if stair is upside down (top half)
-        shape = StairShape.TOP_HALF if (metadata & 0x4) else StairShape.BOTTOM_HALF
-
-        out["orientation"] = orientation
-        out["shape"] = shape
-
-        return out
-
-    def _get_vectors_on_face(
-        self, n1_id: int, n2_id: int, n3_id: int, n4_id: int
-    ) -> list[BoundarySegment]:
-        """
-        Takes four nodes from self.nodes forming a cuboid face and returns the
-        position and direction (x vs z) of each boundary marker in that plane.
-        """
-        # TODO: current wip implementation only takes vertical planes.
-        # should it also accept xz planes for the top/bottom of the boundary?
-        # how would the boundary line work?
-
-        n1, n2, n3, n4 = self.get_nodes([n1_id, n2_id, n3_id, n4_id])
-        given_ids = {n1, n2, n3, n4}
-        all_ids = {0, 1, 2, 3, 4, 5, 6, 7}
-        # id of a node on the opposing plane
-        an_unused_id = (all_ids - given_ids).pop()
-        opposite_node = self.get_node(an_unused_id)
-
-        if n1.z == n2.z == n3.z == n4.z:
-            direction = SegmentDirection.X
-            if n1.z > opposite_node.z:
-                side = SegmentSide.POSITIVE
-            else:
-                side = SegmentSide.NEGATIVE
-        elif n1.x == n2.x == n3.x == n4.x:
-            direction = SegmentDirection.Z
-            if n1.x > opposite_node.x:
-                side = SegmentSide.POSITIVE
-            else:
-                side = SegmentSide.NEGATIVE
-        else:
-            raise ValueError("Received nodes do not form a vertical plane.")
-
-        segments: list[BoundarySegment] = []
-
-        # don't need to check n4 because there are 2 sets of 2 y-coordinates in the 4 nodes
-        top = max(n1.y, n2.y, n3.y)
-        bottom = min(n1.y, n2.y, n3.y)
-        if direction == SegmentDirection.X:
-            right = max(n1.x, n2.x, n3.x)
-            left = min(n1.x, n2.x, n3.x)
-
-            z = n1.z
-            # loop: work from the top down; if we see an air block, then
-            # non-air needs to be appropraite boundary shape
-            for x in range(left, right + 1):
-                found_air = False
-                for y in reversed(list(range(bottom, top + 1))):
-                    block = self.analyze_block(x, y, z)
-                    blocktype = block.get("type")
-
-                    if blocktype == BlockType.UNLOADED:
-                        break  # other y levels will also be unloaded
-                    if blocktype == BlockType.AIR:
-                        found_air = True
-                        continue
-
-                    found_air = self._append_segment_if_needed(
-                        segments, x, y, z, direction, side, block, found_air
+    def _scan_boundary_axis(
+        self,
+        segments: list[BoundarySegment],
+        direction: SegmentDirection,
+        side: SegmentSide,
+        start: int,
+        end: int,
+        fixed: int,
+        top: int,
+        bottom: int,
+    ) -> None:
+        # loop: work from the top down; if we see an air block, then
+        # non-air needs to be appropriate boundary shape
+        for coord in range(start, end + 1):
+            found_air = False
+            for y in reversed(list(range(bottom, top + 1))):
+                if direction == SegmentDirection.X:
+                    block = self._analyze_block(coord, y, fixed)
+                    x = coord
+                    z = fixed
+                elif direction == SegmentDirection.Z:
+                    block = self._analyze_block(fixed, y, coord)
+                    x = fixed
+                    z = coord
+                else:
+                    raise ValueError(
+                        f"Unknown direction '{direction}'; expected {SegmentDirection.X} or {SegmentDirection.Z}."
                     )
 
-        elif direction == SegmentDirection.Z:
-            right = max(n1.z, n2.z, n3.z)
-            left = min(n1.z, n2.z, n3.z)
-        else:
-            raise ValueError(
-                f"Unknown direction {direction}; expected {SegmentDirection.X} or {SegmentDirection.Z}."
-            )
+                blocktype = block.get("type")
 
-        return segments
+                if blocktype == BlockType.UNLOADED:
+                    break  # other y levels will also be unloaded
+                if blocktype == BlockType.AIR:
+                    found_air = True
+                    continue
+
+                found_air = self._append_segment_if_needed(
+                    segments, x, y, z, direction, side, block, found_air
+                )
 
     def _append_segment_if_needed(
-        self, segments, x, y, z, direction, side, block, found_air
+        self,
+        segments: list[BoundarySegment],
+        x: int,
+        y: int,
+        z: int,
+        direction: SegmentDirection,
+        side: SegmentSide,
+        block: dict[str, Enum],
+        found_air: bool,
     ) -> bool:
         if not found_air:
             return False
@@ -1058,3 +1140,37 @@ class BoundaryRegion:
             return False
 
         return found_air
+
+    def _link_segments(
+        self, segments: list[BoundarySegment]
+    ) -> list[deque[BoundarySegment]]:
+        """
+        Takes a list of unordered BoundarySegments and organizes them into several
+        ordered deques representing specific lines traced by the boundary segments.
+        Returns an unordered list of these ordered deques.
+        """
+        if len(segments) == 0:
+            raise ValueError("segments is empty!")
+
+        paths: list[deque[BoundarySegment]] = []
+        for s in segments:
+            done = False
+            for path in paths:
+                for pos in path[0].get_adjacent_voxels():
+                    if s.pos_eq(pos):
+                        path.appendleft(s)
+                        done = True
+                        break
+                if not done:
+                    for pos in path[-1].get_adjacent_voxels():
+                        if s.pos_eq(pos):
+                            path.append(s)
+                            done = True
+                            break
+                if done:
+                    break
+            if not done:
+                # made it through all paths; didn't find a path we belong to
+                paths.append(deque([s]))
+
+        return paths
