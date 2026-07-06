@@ -1617,13 +1617,13 @@ class GameState:
             z: World Z coordinate
 
         Returns:
-            Block state ID (block_id << 4 | metadata) or 0 if chunk not loaded
+            Block state ID (block_id << 4 | metadata) or -1 if chunk not loaded
         """
         chunk_x = x >> 4
         chunk_z = z >> 4
         chunk = self.chunks.get((chunk_x, chunk_z))
         if chunk is None:
-            return 0
+            return -1
         return chunk.get_block(x & 0x0F, y, z & 0x0F)
 
     def get_entity(self, entity_id: int) -> Entity | None:
