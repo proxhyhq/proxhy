@@ -11,12 +11,14 @@ import asyncio
 import json
 import time
 from collections import deque
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 # from plugins.commands import command
 from typing import TYPE_CHECKING, Literal, cast, overload
 
-from gamestate.models import Player, Vec3d
+from gamestate.models import Player
 from gamestate.state import GameState
 from petty.events import listen_client, listen_server, subscribe
 from petty.protocol.datatypes import (
@@ -339,6 +341,31 @@ class BoundariesPlugin:
             raise ValueError(f"Unexpected yaw value: {yaw}")
 
         return Pos(local_x, dy, local_z)
+
+    @staticmethod
+    def get_global_pos_yaw(
+        pos: Pos, anchor: Pos, yaw: Literal[0, 90, -90, 180, -180]
+    ) -> Pos:
+        local_x = pos.x
+        local_y = pos.y
+        local_z = pos.z
+
+        if yaw == 0:
+            world_x = anchor.x + local_x
+            world_z = anchor.z + local_z
+        elif yaw == 90:
+            world_x = anchor.x - local_z
+            world_z = anchor.z + local_x
+        elif yaw == 180 or yaw == -180:
+            world_x = anchor.x - local_x
+            world_z = anchor.z - local_z
+        elif yaw == -90:
+            world_x = anchor.x + local_z
+            world_z = anchor.z - local_x
+        else:
+            raise ValueError(f"Unexpected yaw value: {yaw}")
+
+        return Pos(world_x, anchor.y + local_y, world_z)
 
     @listen_client(0x08, blocking=True)
     async def placed_block(self: ProxhyPlugin, buff: Buffer):
@@ -754,10 +781,6 @@ class BoundariesPlugin:
         y_adjust = int(pos[1] * 32)
         z_adjust = int(pos[2] * 32)
 
-        rot_x = rot[0]
-        rot_y = rot[1]
-        rot_z = rot[2]
-
         # spawn mob packet
         self.downstream.send_packet(
             0x0F,
@@ -781,9 +804,9 @@ class BoundariesPlugin:
             UnsignedByte.pack(0x12),  # Value: 0x10 (Marker) | 0x02 (NoGravity)
             # Index 11: Head Pose (Vector3f)
             UnsignedByte.pack(0xEB),  # Header: Type 7, Index 11
-            Float.pack(rot_x),  # Pitch (X)
-            Float.pack(rot_y),  # Yaw (Y)
-            Float.pack(rot_z),  # Roll (Z)
+            Float.pack(rot[0]),  # Pitch (X)
+            Float.pack(rot[1]),  # Yaw (Y)
+            Float.pack(rot[2]),  # Roll (Z)
             UnsignedByte.pack(0x7F),  # Metadata Terminator
         )
 
@@ -799,3 +822,239 @@ class BoundariesPlugin:
             Short.pack(metadata),  # Item Damage/Metadata: 0/1 (stone/cobblestone)
             UnsignedByte.pack(0),  # NBT Terminator (Empty NBT compound)
         )
+
+
+class BlockType(Enum):
+    UNLOADED = -1
+    AIR = 0
+    SOLID = 1
+    SLAB = 2
+    STAIR = 3
+
+
+class SegmentDirection(Enum):
+    X = 0
+    Z = 1
+
+
+class SegmentSide(Enum):
+    POSITIVE = 1
+    NEGATIVE = -1
+
+
+class StairOrientation(Enum):
+    UNKNOWN = 0
+    NORTH = 1
+    EAST = 2
+    SOUTH = 3
+    WEST = 4
+
+
+class StairShape(Enum):
+    TOP_HALF = 0
+    BOTTOM_HALF = 1
+
+
+@dataclass
+class BoundarySegment(Pos):
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        z: int,
+        dir: SegmentDirection,
+        side: SegmentSide,
+        type: BlockType,
+        metadata: dict | None = None,
+    ):
+        super().__init__(x, y, z)
+        self.direction = dir
+        self.side = side
+        self.type = type
+        self.metadata = metadata
+
+
+class BoundaryRegion:
+    def __init__(self, c1: Pos, c2: Pos, gamestate: GameState):
+        """Positions should be global positions in world, not local boundary boxes."""
+        # a boundary region has a node at each corner of cuboid; 8 total
+        self.nodes = (
+            Pos(c1.x, c1.y, c1.z),
+            Pos(c1.x, c1.y, c2.z),
+            Pos(c1.x, c2.y, c1.z),
+            Pos(c1.x, c2.y, c2.z),
+            Pos(c2.x, c1.y, c1.z),
+            Pos(c2.x, c1.y, c2.z),
+            Pos(c2.x, c2.y, c1.z),
+            Pos(c2.x, c2.y, c2.z),
+        )
+
+        # gamestate is necessary to query blocks at a location
+        self.gamestate = gamestate
+
+    def validate_ids(self, ids: list[int]) -> None:
+        if any(0 > i > 7 for i in ids):
+            raise ValueError("Invalid id received; must be int literal 0 through 7.")
+
+    def get_node(self, id: int) -> Pos:
+        self.validate_ids([id])
+        return self.nodes[id]
+
+    def get_nodes(self, ids: list[int]) -> list[Pos]:
+        self.validate_ids(ids)
+
+        out = []
+        for id in ids:
+            out.append(self.nodes[id])
+        return out
+
+    def analyze_block(self, x: int, y: int, z: int) -> dict:
+        """
+        Analyzes a block at the given world coordinates to determine its type and properties.
+
+        Returns:
+            dict: A dictionary containing boolean flags for block types and additional
+                metadata for stairs (orientation and shape) if applicable.
+        """
+        state_id = self.gamestate.get_block(x, y, z)
+
+        if state_id == -1:
+            return {"type": BlockType.UNLOADED}
+
+        block_id = state_id >> 4
+        metadata = state_id & 0x0F
+
+        # https://minecraft-ids.grahamedgecombe.com/
+        AIR_ID = 0
+        SLAB_IDS = {44, 126, 182, 205}
+        STAIR_IDS = {53, 67, 108, 109, 114, 128, 134, 135, 136, 156, 163, 164, 180, 203}
+
+        # evaluate block type
+        if block_id == AIR_ID:
+            return {"type": BlockType.AIR}
+        elif block_id in SLAB_IDS:
+            return {"type": BlockType.SLAB}
+        elif block_id in STAIR_IDS:
+            out: dict[str, Enum] = {"type": BlockType.STAIR}
+        else:
+            return {"type": BlockType.SOLID}
+
+        # if we made it here, it's a stair; append orientation and shape data
+        # lowest 2 bits (0x3) store the facing direction
+        facing_map = {
+            0: StairOrientation.EAST,
+            1: StairOrientation.WEST,
+            2: StairOrientation.SOUTH,
+            3: StairOrientation.NORTH,
+        }
+        orientation = facing_map.get(metadata & 0x3, StairOrientation.UNKNOWN)
+        # 3rd bit (0x4) indicates if stair is upside down (top half)
+        shape = StairShape.TOP_HALF if (metadata & 0x4) else StairShape.BOTTOM_HALF
+
+        out["orientation"] = orientation
+        out["shape"] = shape
+
+        return out
+
+    def _get_vectors_on_face(
+        self, n1_id: int, n2_id: int, n3_id: int, n4_id: int
+    ) -> list[BoundarySegment]:
+        """
+        Takes four nodes from self.nodes forming a cuboid face and returns the
+        position and direction (x vs z) of each boundary marker in that plane.
+        """
+        # TODO: current wip implementation only takes vertical planes.
+        # should it also accept xz planes for the top/bottom of the boundary?
+        # how would the boundary line work?
+
+        n1, n2, n3, n4 = self.get_nodes([n1_id, n2_id, n3_id, n4_id])
+        given_ids = {n1, n2, n3, n4}
+        all_ids = {0, 1, 2, 3, 4, 5, 6, 7}
+        # id of a node on the opposing plane
+        an_unused_id = (all_ids - given_ids).pop()
+        opposite_node = self.get_node(an_unused_id)
+
+        if n1.z == n2.z == n3.z == n4.z:
+            direction = SegmentDirection.X
+            if n1.z > opposite_node.z:
+                side = SegmentSide.POSITIVE
+            else:
+                side = SegmentSide.NEGATIVE
+        elif n1.x == n2.x == n3.x == n4.x:
+            direction = SegmentDirection.Z
+            if n1.x > opposite_node.x:
+                side = SegmentSide.POSITIVE
+            else:
+                side = SegmentSide.NEGATIVE
+        else:
+            raise ValueError("Received nodes do not form a vertical plane.")
+
+        segments: list[BoundarySegment] = []
+
+        # don't need to check n4 because there are 2 sets of 2 y-coordinates in the 4 nodes
+        top = max(n1.y, n2.y, n3.y)
+        bottom = min(n1.y, n2.y, n3.y)
+        if direction == SegmentDirection.X:
+            right = max(n1.x, n2.x, n3.x)
+            left = min(n1.x, n2.x, n3.x)
+
+            z = n1.z
+            # loop: work from the top down; if we see an air block, then
+            # non-air needs to be appropraite boundary shape
+            for x in range(left, right + 1):
+                found_air = False
+                for y in reversed(list(range(bottom, top + 1))):
+                    block = self.analyze_block(x, y, z)
+                    blocktype = block.get("type")
+
+                    if blocktype == BlockType.UNLOADED:
+                        break  # other y levels will also be unloaded
+                    if blocktype == BlockType.AIR:
+                        found_air = True
+                        continue
+
+                    found_air = self._append_segment_if_needed(
+                        segments, x, y, z, direction, side, block, found_air
+                    )
+
+        elif direction == SegmentDirection.Z:
+            right = max(n1.z, n2.z, n3.z)
+            left = min(n1.z, n2.z, n3.z)
+        else:
+            raise ValueError(
+                f"Unknown direction {direction}; expected {SegmentDirection.X} or {SegmentDirection.Z}."
+            )
+
+        return segments
+
+    def _append_segment_if_needed(
+        self, segments, x, y, z, direction, side, block, found_air
+    ) -> bool:
+        if not found_air:
+            return False
+
+        blocktype = block.get("type")
+        if blocktype == BlockType.SLAB:
+            segments.append(BoundarySegment(x, y, z, direction, side, BlockType.SLAB))
+            return False
+        if blocktype == BlockType.STAIR:
+            segments.append(
+                BoundarySegment(
+                    x,
+                    y,
+                    z,
+                    direction,
+                    side,
+                    BlockType.STAIR,
+                    {
+                        "orientation": block.get("orientation"),
+                        "shape": block.get("shape"),
+                    },
+                )
+            )
+            return False
+        if blocktype == BlockType.SOLID:
+            segments.append(BoundarySegment(x, y, z, direction, side, BlockType.SOLID))
+            return False
+
+        return found_air
