@@ -15,6 +15,11 @@ class Pos:
     y: int = 0
     z: int = 0
 
+    def __iter__(self):
+        yield self.x
+        yield self.y
+        yield self.z
+
 
 @dataclass
 class Item:
