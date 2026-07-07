@@ -9,6 +9,7 @@ client.
 
 import asyncio
 import json
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -62,6 +63,7 @@ class BoundariesPlugin:
         ] = {}
         self.recently_placed: deque[Pos] = deque(maxlen=10)
         self.placed_mappings: deque[int] = deque(maxlen=10)
+        self.boundary_regions: list[BoundaryRegion] = []
 
         # developer flag to enable features that make it
         # easier to get the boundary positions on new maps
@@ -78,6 +80,17 @@ class BoundariesPlugin:
         # based on direction facing when you spawned in
         self.boundary_corner_1 = Pos(0, 0, 0)
         self.boundary_corner_2 = Pos(0, 0, 0)
+        self.total_boundaries = 0
+
+        # TODO: make this into a setting
+        self.render_boundaries = True
+
+        # max number of blocks away to show boundary
+        # TODO: make this into a setting(?)
+        self.BOUNDARY_CULL_RADIUS = 30
+
+        # how often to check if we're near a boundary
+        self.CHECK_BOUNDARIES_TIME = 0.5
 
         # window in which to consider the "you can't place blocks here!" chat msg as being recent
         self.CPB_WINDOW = 0.2
@@ -85,8 +98,23 @@ class BoundariesPlugin:
         # how often should we check for nearby generators (in seconds)
         self.GEN_CHECK_TIME = 1
 
+        self._next_boundary_entity_id: int | None = None
+
         if self.log_generators:
             self.create_task(self.loop_gen_check())
+
+        if self.render_boundaries:
+            self.create_task(self.loop_boundaries_check())
+
+    def _allocate_boundary_entity_id(self: ProxhyPlugin) -> int:
+        if self._next_boundary_entity_id is None:
+            existing_ids = set(self.gamestate.entities.keys())
+            existing_ids.add(self.gamestate.player_entity_id)
+            self._next_boundary_entity_id = max(existing_ids, default=0) + 1
+
+        entity_id = self._next_boundary_entity_id
+        self._next_boundary_entity_id += 1
+        return entity_id
 
     @subscribe(r"chat:server:The game starts in 1 second!")
     async def received_game_start_chat(self: ProxhyPlugin, match, buff: Buffer):
@@ -116,6 +144,12 @@ class BoundariesPlugin:
             self.map_data.setdefault("generators", {})
             self.map_data["generators"].setdefault("emerald", [])
             self.map_data["generators"].setdefault("diamond", [])
+
+            self.total_boundaries = (
+                len(self.map_data["generators"]["emerald"])
+                + len(self.map_data["generators"]["diamond"])
+                + len(self.map_data["spawnpoints"])
+            )
         except KeyError:
             self.logger.warning(f"Unknown map: '{self.game.map.name}'")
             return
@@ -187,6 +221,65 @@ class BoundariesPlugin:
 
         if spawnpoints_added > 0:
             self._save_bedwars_map_data()
+
+    def initialize_all_boundaries(self: ProxhyPlugin):
+        boundary_corners = self._collect_all_boundary_corners()
+        if len(self.boundary_regions):
+            self.logger.warning(
+                "Already initialized some boundaries! May re-initialize existing ones by mistake."
+            )
+        for c in boundary_corners:
+            self.boundary_regions.append(BoundaryRegion(c[0], c[1], self.gamestate))
+
+    def _collect_all_boundary_corners(self: ProxhyPlugin) -> list[tuple[Pos, Pos]]:
+        """Collects boundary corners from bedwars_maps.json for bases and generators."""
+        # diamond and emerald generators are a 7x7x7 cube
+        # saved coordinate in file is at the top & center block
+        emerald_centers = self.map_data["generators"]["emerald"]
+        diamond_centers = self.map_data["generators"]["diamond"]
+
+        gen_centers: list[list[float]]
+        gen_centers = emerald_centers.extend(diamond_centers)
+
+        boundary_corners: list[tuple[Pos, Pos]] = []
+        for c in gen_centers:
+            x, y, z = math.floor(c[0]), math.floor(c[1]), math.floor(c[2])
+            corner1 = Pos(x + 3, y, z + 3)
+            corner2 = Pos(x - 3, y - 6, z - 3)
+            boundary_corners.append((corner1, corner2))
+
+        spawnpoints: list[list[float]]
+        spawnpoints = self.map_data["spawnpoints"].values()
+        boundary_data: None | dict[str, list[int]] = self.map_data.get("boundary")
+        if boundary_data is not None:
+            rel_corner1 = Pos(
+                boundary_data["corner1"][0],
+                boundary_data["corner1"][1],
+                boundary_data["corner1"][2],
+            )
+            rel_corner2 = Pos(
+                boundary_data["corner2"][0],
+                boundary_data["corner2"][1],
+                boundary_data["corner2"][2],
+            )
+            for s in spawnpoints:
+                spawn_x, spawn_y, spawn_z, spawn_yaw = (
+                    math.floor(s[0]),
+                    math.floor(s[1]),
+                    math.floor(s[2]),
+                    s[3],
+                )
+                yaw_int = int(spawn_yaw)
+                yaw = self.validate_yaw(yaw_int)
+                if yaw:
+                    c1 = self.get_global_pos_yaw(
+                        rel_corner1, Pos(spawn_x, spawn_y, spawn_z), yaw
+                    )
+                    c2 = self.get_global_pos_yaw(
+                        rel_corner2, Pos(spawn_x, spawn_y, spawn_z), yaw
+                    )
+                    boundary_corners.append((c1, c2))
+        return boundary_corners
 
     def validate_yaw(
         self: ProxhyPlugin, yaw: int | float, snap=True
@@ -407,9 +500,6 @@ class BoundariesPlugin:
         return bc1x, bc1y, bc1z, bc2x, bc2y, bc2z
 
     def update_boundary_size(self: ProxhyPlugin, block_deleted: int, pos: Pos):
-        # TODO: debug why it only works on some maps
-        #   - known debug: this method is still getting called for those maps, not sure where it's exiting early tho
-        #   - known debug: own spawnpoint WAS logged during these trials, so nearest spawnpoint is valid
         if self.map_data.get("spawnpoints") is None:
             if self.game.map is not None:
                 self.logger.warning(
@@ -764,10 +854,81 @@ class BoundariesPlugin:
                         )
                     )
 
-        # else:
-        # print("Did not find generators.")
+    async def loop_boundaries_check(self: ProxhyPlugin):
+        while True:
+            await asyncio.sleep(self.CHECK_BOUNDARIES_TIME)
+            if (
+                not self.game.started
+                or self.game.gametype != "bedwars"
+                or not hasattr(self, "map_data")
+                or len(self.boundary_regions) == self.total_boundaries
+            ):
+                continue
+            await self.check_loaded_boundaries()
 
-    async def place_boundary(
+    # TODO: move this to another file?
+    @staticmethod
+    def distance_to(
+        p1: tuple[float, float, float], p2: tuple[float, float, float]
+    ) -> float:
+        dx = p2[0] - p1[0]
+        dy = p2[1] - p1[1]
+        dz = p2[2] - p1[2]
+        return math.sqrt(dx**2 + dy**2 + dz**2)
+
+    async def check_loaded_boundaries(self: ProxhyPlugin):
+        # first initialize any un-initialized boundaries if they're loaded
+        if not len(self.boundary_regions):
+            return
+        for r in self.boundary_regions:
+            if r.initialized_segments:
+                continue
+            c1_block = self.gamestate.get_block(r.c1.x, r.c1.y, r.c1.z)
+            c2_block = self.gamestate.get_block(r.c2.x, r.c2.y, r.c2.z)
+            if c1_block == -1 or c2_block == -1:
+                # either boundary corner is unloaded
+                continue
+
+            # now we have an uninitialized boundary region with both corners loaded
+            # we can safely initialize its segments
+            r.initialize_segments()  # might be laggy but this is in a non-blocking task
+
+        # check if any boundaries are close enough to render them
+        player = self.gamestate.entities.get(self.gamestate.player_entity_id)
+        if player:
+            player_position = (player.position.x, player.position.y, player.position.z)
+        else:
+            self.logger.warning(
+                "Could not get own position! Aborting nearby boundary check..."
+            )
+            return
+        for r in self.boundary_regions:
+            if not r.initialized_segments:
+                continue
+
+            dist_c1 = self.distance_to(player_position, tuple(r.c1))
+            dist_c2 = self.distance_to(player_position, tuple(r.c1))
+
+            boundary_dist = min([dist_c1, dist_c2])
+            if not r.displayed:
+                # check if we should display it
+                if boundary_dist < self.BOUNDARY_CULL_RADIUS:
+                    await self.render_boundary(r)
+
+            elif r.displayed:
+                # check if we should cull it
+                if boundary_dist > self.BOUNDARY_CULL_RADIUS:
+                    await self.unrender_boundary(r)
+
+    async def render_boundary(self, region: BoundaryRegion):
+        """Places all segments in a given boundary region in the world"""
+        if not region.initialized_segments:
+            raise ValueError("Cannot render a boundary with uninitialized segments!")
+
+    async def unrender_boundary(self, region: BoundaryRegion):
+        """Removes all segments in a given rendered boundary region in the world."""
+
+    async def place_boundary_segment(
         self: ProxhyPlugin,
         pos: tuple[float, float, float],
         b_type: Literal["corner", "edge"],
@@ -782,10 +943,12 @@ class BoundariesPlugin:
         y_adjust = int(pos[1] * 32)
         z_adjust = int(pos[2] * 32)
 
+        entity_id = self._allocate_boundary_entity_id()
+
         # spawn mob packet
         self.downstream.send_packet(
             0x0F,
-            VarInt.pack(999),  # Entity ID
+            VarInt.pack(entity_id),
             UnsignedByte.pack(78),  # Type: Armor Stand
             Int.pack(x_adjust),
             Int.pack(y_adjust),
@@ -815,7 +978,7 @@ class BoundariesPlugin:
         metadata = 0 if b_type == "edge" else 1
         self.downstream.send_packet(
             0x04,
-            VarInt.pack(999),  # Entity ID (must match the spawn packet)
+            VarInt.pack(entity_id),
             Short.pack(4),  # Slot: 4 (Helmet)
             # -- SLOT DATA --
             Short.pack(97),  # Item ID: Monster Egg
@@ -1018,6 +1181,9 @@ class BoundaryRegion:
     def __init__(self, c1: Pos, c2: Pos, gamestate: GameState):
         """Positions should be global positions in world, not local boundary boxes."""
         # a boundary region has a node at each corner of cuboid; 8 total
+        self.c1 = c1
+        self.c2 = c2
+
         self.nodes = (
             Pos(c1.x, c1.y, c1.z),
             Pos(c1.x, c1.y, c2.z),
@@ -1031,6 +1197,11 @@ class BoundaryRegion:
 
         # gamestate is necessary to query blocks at a location
         self.gamestate = gamestate
+
+        # this shouldn't take too long, but just to be safe, don't interrupt the packet stream
+        self.initialized_segments: bool = False
+        self.displayed: bool = False
+        self.segments: list[BoundarySegment] = []
 
     def validate_ids(self, ids: list[int]) -> None:
         if not all(0 <= i <= 7 for i in ids):
@@ -1047,6 +1218,13 @@ class BoundaryRegion:
         for id in ids:
             out.append(self.nodes[id])
         return out
+
+    def initialize_segments(self):
+        chains = self.compute_boundary_segments()
+        self.segments = [
+            segment for boundary_chain in chains for segment in boundary_chain
+        ]
+        self.initialized_segments = True
 
     def compute_boundary_segments(self) -> list[BoundaryChain]:
         min_x_face = [0, 1, 2, 3]
@@ -1272,7 +1450,7 @@ class BoundaryRegion:
         Takes four nodes from self.nodes forming a cuboid face and returns the
         position and direction (x vs z) of each boundary marker in that plane.
         """
-        # TODO: current wip implementation only takes vertical planes.
+        # TODO: current implementation only takes vertical planes.
         # should it also accept xz planes for the top/bottom of the boundary?
         # how would the boundary line work?
 
