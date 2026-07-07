@@ -666,6 +666,7 @@ class BoundariesPlugin:
         self.map_data.setdefault("generators", {})
         self.map_data["generators"].setdefault("emerald", [])
         self.map_data["generators"].setdefault("diamond", [])
+
         self.update_gen_positions()
 
     async def loop_gen_check(self: ProxhyPlugin):
@@ -833,13 +834,31 @@ class BlockType(Enum):
 
 
 class SegmentDirection(Enum):
-    X = 0
-    Z = 1
+    CORNER = 0
+    X = 1
+    Z = 2
 
 
 class SegmentSide(Enum):
+    CORNER = 0
     POSITIVE = 1
     NEGATIVE = -1
+
+
+class SegmentCorner(Enum):
+    """
+    Nonzero means it's a corner.
+    POS_POS: Corner points towards +x, +z
+    POS_NEG: Points towards +x, -z
+    NEG_POS: Points towards -x, +z
+    NEG_NEG: Points towards -x, -z
+    """
+
+    NOT_CORNER = 0
+    POS_POS = 1
+    POS_NEG = 2
+    NEG_POS = 3
+    NEG_NEG = 4
 
 
 class StairOrientation(Enum):
@@ -855,6 +874,13 @@ class StairShape(Enum):
     BOTTOM_HALF = 1
 
 
+class BoundaryFace(Enum):
+    MIN_X = 0
+    MAX_X = 1
+    MIN_Y = 2
+    MAX_Y = 3
+
+
 @dataclass
 class BoundarySegment(Pos):
     def __init__(
@@ -865,13 +891,21 @@ class BoundarySegment(Pos):
         direction: SegmentDirection,
         side: SegmentSide,
         type: BlockType,
+        corner: SegmentCorner = SegmentCorner.NOT_CORNER,
         metadata: dict | None = None,
     ):
         super().__init__(x, y, z)
         self.direction = direction
         self.side = side
         self.type = type
+        self.corner = corner
         self.metadata = metadata
+
+    def pos_eq_other(self, other: BoundarySegment):
+        if self.x == other.x and self.y == other.y and self.z == other.z:
+            return True
+        else:
+            return False
 
     def pos_eq(self, pos: Pos):
         if self.x == pos.x and self.y == pos.y and self.z == pos.z:
@@ -908,6 +942,59 @@ class BoundarySegment(Pos):
                 Pos(self.x, self.y + 1, self.z),
                 Pos(self.x, self.y - 1, self.z),
             ]
+        else:
+            raise NotImplementedError("Corners not supported for get_adjacent_voxels")
+
+
+class BoundaryChain:
+    def __init__(self, iterable=(), maxlen=None):
+        self._deque: deque[BoundarySegment] = deque(iterable, maxlen)
+        self.merged = False
+
+    def append(self, item):
+        self._deque.append(item)
+
+    def popleft(self):
+        return self._deque.popleft()
+
+    def __iter__(self):
+        return iter(self._deque)
+
+    def __len__(self):
+        return len(self._deque)
+
+    def __repr__(self):
+        return f"BoundaryChain({list(self._deque)}, merged={self.merged})"
+
+    def __getitem__(self, item):
+        return self._deque[item]
+
+    def appendleft(self, item):
+        return self._deque.appendleft(item)
+
+    def reverse(self):
+        self._deque.reverse()
+
+    def __add__(self, other):
+        if not isinstance(other, (BoundaryChain, deque, list)):
+            return NotImplemented
+        other_deque = other._deque if isinstance(other, BoundaryChain) else other
+
+        # build new object
+        new_chain = BoundaryChain(list(self._deque) + list(other_deque))
+        new_chain.merged = False
+        return new_chain
+
+    def __iadd__(self, other):
+        if not isinstance(other, (BoundaryChain, deque, list)):
+            return NotImplemented
+        other_deque = other._deque if isinstance(other, BoundaryChain) else other
+        self._deque.extend(other_deque)
+        return self
+
+    def __getattr__(self, name):
+        # if BoundaryChain doesn't have the method look it up in deque
+        return getattr(self._deque, name)
 
 
 class BoundaryRegion:
@@ -951,13 +1038,131 @@ class BoundaryRegion:
         max_y_face = [2, 3, 6, 7]
 
         faces = [min_x_face, max_x_face, min_y_face, max_y_face]
+        chains: dict[BoundaryFace, list[BoundaryChain]] = {}
 
-        for f in faces:
+        for id, f in enumerate(faces):
             segments = self._get_segments_on_face(*f)
             linked = self._link_segments(segments)
-            # TODO: merge corners of all paths by checking [0] and [-1] indices of
-            # paths only on faces that intersect at corners
-            # you can use BoundarySegment.pos_eq or write an __eq__ method (maybe that's better actually)
+            chains[BoundaryFace(id)] = linked
+
+        unmerged_chains: list[BoundaryChain] = []
+        for v in chains.values():
+            unmerged_chains.extend(v)
+        merged_chains = self._merge_chains(unmerged_chains)
+
+    def _merge_chains(self, chains: list[BoundaryChain]) -> list[BoundaryChain]:
+        while True:
+            partially_merged: list[BoundaryChain] = []
+            for chain in chains:
+                if chain.merged:
+                    continue
+                for other_chain in chains:
+                    if other_chain.merged or other_chain is chain:
+                        continue
+
+                    if chain[0].pos_eq_other(other_chain[0]):
+                        # our head meets another chain's head
+                        corner = self._merge_corner(other_chain[0], chain[0])
+
+                        other_chain.popleft()
+                        chain.popleft()
+
+                        other_chain.reverse()
+                        other_chain.append(corner)
+
+                        # order: reversed other_chain (now tail-first) + chain
+                        partially_merged.append(other_chain + chain)
+
+                        chain.merged = True
+                        other_chain.merged = True
+                        break
+                    elif chain[0].pos_eq_other(other_chain[-1]):
+                        # our head meets another chain's tail
+                        corner = self._merge_corner(other_chain[-1], chain[0])
+
+                        other_chain.pop()
+                        chain.popleft()
+                        other_chain.append(corner)
+
+                        partially_merged.append(other_chain + chain)
+
+                        chain.merged = True
+                        other_chain.merged = True
+                        break
+                    elif chain[-1].pos_eq_other(other_chain[0]):
+                        # our tail meets another chain's head
+                        corner = self._merge_corner(chain[-1], other_chain[0])
+
+                        chain.pop()
+                        other_chain.popleft()
+                        chain.append(corner)
+
+                        partially_merged.append(chain + other_chain)
+
+                        chain.merged = True
+                        other_chain.merged = True
+                        break
+                    elif chain[-1].pos_eq_other(other_chain[-1]):
+                        # our tail meets another chain's tail
+                        corner = self._merge_corner(chain[-1], other_chain[-1])
+
+                        chain.pop()
+                        other_chain.pop()
+
+                        chain.append(corner)
+                        other_chain.reverse()
+
+                        # order: chain + reversed other_chain
+                        partially_merged.append(chain + other_chain)
+
+                        chain.merged = True
+                        other_chain.merged = True
+                        break
+
+            unmerged = [c for c in chains if not c.merged]
+            if len(unmerged) == len(chains):
+                return chains  # no merges happened this pass
+
+            partially_merged.extend(unmerged)
+
+            chains = partially_merged
+
+    def _merge_corner(
+        self, s1: BoundarySegment, s2: BoundarySegment
+    ) -> BoundarySegment:
+        """Takes in two segments; returns a corner segment"""
+        if not s1.pos_eq_other(s2):
+            raise ValueError("Received two segments with different positions.")
+
+        if s1.direction == s2.direction:
+            raise ValueError("Received two segments that do not form a corner.")
+
+        edge_info = {(s1.side, s1.direction), (s2.side, s2.direction)}
+        pos = SegmentSide.POSITIVE
+        neg = SegmentSide.NEGATIVE
+        x = SegmentDirection.X
+        z = SegmentDirection.Z
+
+        if edge_info == {(pos, x), (pos, z)}:
+            corner_type = SegmentCorner.POS_POS
+        elif edge_info == {(neg, x), (pos, z)}:
+            corner_type = SegmentCorner.POS_NEG
+        elif edge_info == {(pos, x), (neg, z)}:
+            corner_type = SegmentCorner.NEG_POS
+        elif edge_info == {(neg, x), (neg, z)}:
+            corner_type = SegmentCorner.NEG_NEG
+        else:
+            raise ValueError(f"Unknown corner type from edge info: {edge_info}.")
+
+        return BoundarySegment(
+            s1.x,
+            s1.y,
+            s1.z,
+            SegmentDirection.CORNER,
+            SegmentSide.CORNER,
+            s1.type,
+            corner_type,
+        )
 
     def _get_segments_on_face(
         self, n1_id: int, n2_id: int, n3_id: int, n4_id: int
@@ -1076,7 +1281,7 @@ class BoundaryRegion:
         bottom: int,
     ) -> None:
         # loop: work from the top down; if we see an air block, then
-        # non-air needs to be appropriate boundary shape
+        # next non-air needs to be appropriate boundary shape
         for coord in range(start, end + 1):
             found_air = False
             for y in reversed(list(range(bottom, top + 1))):
@@ -1132,7 +1337,7 @@ class BoundaryRegion:
                     direction,
                     side,
                     BlockType.STAIR,
-                    {
+                    metadata={
                         "orientation": block.get("orientation"),
                         "shape": block.get("shape"),
                     },
@@ -1145,18 +1350,18 @@ class BoundaryRegion:
 
         return found_air
 
-    def _link_segments(
-        self, segments: list[BoundarySegment]
-    ) -> list[deque[BoundarySegment]]:
+    def _link_segments(self, segments: list[BoundarySegment]) -> list[BoundaryChain]:
         """
         Takes a list of unordered BoundarySegments and organizes them into several
-        ordered deques representing specific lines traced by the boundary segments.
-        Returns an unordered list of these ordered deques.
+        ordered BoundaryChains representing specific lines traced by the boundary
+        segments.
+            Returns:
+                an unordered list of BoundaryChains.
         """
         if len(segments) == 0:
             raise ValueError("segments is empty!")
 
-        paths: list[deque[BoundarySegment]] = []
+        paths: list[BoundaryChain] = []
         for s in segments:
             done = False
             for path in paths:
@@ -1175,7 +1380,8 @@ class BoundaryRegion:
                     break
             if not done:
                 # made it through all paths; didn't find a path we belong to
-                paths.append(deque([s]))
+                # paths.append(deque([s]))
+                paths.append(BoundaryChain([s]))
 
         # consolodate/merge all paths that quietly met up
         merged = True
