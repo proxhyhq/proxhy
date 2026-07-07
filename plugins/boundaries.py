@@ -881,6 +881,21 @@ class BoundaryFace(Enum):
     MAX_Y = 3
 
 
+class BlockFace(Enum):
+    """
+    Segments sit on the inner edge of air blocks. The default for
+    segments is BOTTOM; the bottom of an air block means they'll
+    appear directly on top of whatever block is beneath them.
+    """
+
+    BOTTOM = 0
+    POS_X = 1
+    POS_Z = 2
+    NEG_X = 3
+    NEG_Z = 4
+    TOP = 5
+
+
 @dataclass
 class BoundarySegment(Pos):
     def __init__(
@@ -892,6 +907,7 @@ class BoundarySegment(Pos):
         side: SegmentSide,
         type: BlockType,
         corner: SegmentCorner = SegmentCorner.NOT_CORNER,
+        block_face: BlockFace = BlockFace.BOTTOM,
         metadata: dict | None = None,
     ):
         super().__init__(x, y, z)
@@ -899,6 +915,7 @@ class BoundarySegment(Pos):
         self.side = side
         self.type = type
         self.corner = corner
+        self.block_face = block_face
         self.metadata = metadata
 
     def pos_eq_other(self, other: BoundarySegment):
@@ -1031,7 +1048,7 @@ class BoundaryRegion:
             out.append(self.nodes[id])
         return out
 
-    def compute_boundary_segments(self):
+    def compute_boundary_segments(self) -> list[BoundaryChain]:
         min_x_face = [0, 1, 2, 3]
         max_x_face = [4, 5, 6, 7]
         min_y_face = [0, 1, 4, 5]
@@ -1049,8 +1066,92 @@ class BoundaryRegion:
         for v in chains.values():
             unmerged_chains.extend(v)
         merged_chains = self._merge_chains(unmerged_chains)
+        continuous_chains = [self._make_chain_continuous(c) for c in merged_chains]
+
+        return continuous_chains
+
+    def _make_chain_continuous(self, chain: BoundaryChain) -> BoundaryChain:
+        """
+        Adds vertical boundary segments where block elevation changes
+        so the line appears continuous.
+        """
+        if len(chain) < 2:
+            return chain
+
+        flat_segments = list(chain)  # indexing middle deque elements is expensive
+
+        out = BoundaryChain()
+        for i in range(len(flat_segments) - 1):
+            current_seg = flat_segments[i]
+            next_seg = flat_segments[i + 1]
+
+            out.append(current_seg)
+
+            if current_seg.y != next_seg.y:
+                connector = self._get_vertical_connector(current_seg, next_seg)
+                out.append(connector)
+
+        out.append(flat_segments[-1])
+        return out
+
+    def _get_vertical_connector(
+        self, seg1: BoundarySegment, seg2: BoundarySegment
+    ) -> BoundarySegment:
+        # visit link below for a diagram to visualize this logic
+        # https://drive.google.com/file/d/1Za_EJ_lQwuy1oSvR9RPwjHllaXweApbR/view?usp=sharing
+        if (
+            seg1.side != seg2.side
+            or (
+                seg1.direction != seg2.direction
+                and SegmentDirection.CORNER not in {seg1.direction, seg2.direction}
+            )
+            or seg1.y == seg2.y
+        ):
+            raise ValueError("Segments are not compatible.")
+
+        if seg1.direction == seg2.direction == SegmentDirection.CORNER:
+            raise ValueError(
+                "Vertical connection unsupported between two adjacent corners."
+            )
+
+        if seg1.direction != seg2.direction:
+            # one must be a corner
+            if seg1.direction is SegmentDirection.CORNER:
+                direction = seg2.direction
+            else:
+                direction = seg1.direction
+        else:
+            direction = seg1.direction
+
+        face: BlockFace
+        lower = seg1 if seg1.y < seg2.y else seg2
+        higher = seg1 if lower is seg2 else seg2
+        if direction == SegmentDirection.X:
+            if lower.x - higher.x > 0:
+                face = BlockFace.POS_X
+            else:
+                face = BlockFace.NEG_X
+        elif direction == SegmentDirection.Z:
+            if lower.z - higher.z > 0:
+                face = BlockFace.POS_Z
+            else:
+                face = BlockFace.NEG_Z
+        else:
+            raise ValueError("internal logic error in _get_vertical_connector")
+
+        # TODO: should return type field really be lower.type?
+        return BoundarySegment(
+            lower.x,
+            lower.y,
+            lower.z,
+            direction,
+            seg1.side,
+            lower.type,
+            block_face=face,
+        )
 
     def _merge_chains(self, chains: list[BoundaryChain]) -> list[BoundaryChain]:
+        """Iteratively merges chains that intersect on corner boundaries."""
         while True:
             partially_merged: list[BoundaryChain] = []
             for chain in chains:
@@ -1130,7 +1231,7 @@ class BoundaryRegion:
     def _merge_corner(
         self, s1: BoundarySegment, s2: BoundarySegment
     ) -> BoundarySegment:
-        """Takes in two segments; returns a corner segment"""
+        """Takes in two segments; returns their matching corner segment."""
         if not s1.pos_eq_other(s2):
             raise ValueError("Received two segments with different positions.")
 
@@ -1326,13 +1427,15 @@ class BoundaryRegion:
 
         blocktype = block.get("type")
         if blocktype == BlockType.SLAB:
-            segments.append(BoundarySegment(x, y, z, direction, side, BlockType.SLAB))
+            segments.append(
+                BoundarySegment(x, y + 1, z, direction, side, BlockType.SLAB)
+            )
             return False
         if blocktype == BlockType.STAIR:
             segments.append(
                 BoundarySegment(
                     x,
-                    y,
+                    y + 1,
                     z,
                     direction,
                     side,
@@ -1345,7 +1448,9 @@ class BoundaryRegion:
             )
             return False
         if blocktype == BlockType.SOLID:
-            segments.append(BoundarySegment(x, y, z, direction, side, BlockType.SOLID))
+            segments.append(
+                BoundarySegment(x, y + 1, z, direction, side, BlockType.SOLID)
+            )
             return False
 
         return found_air
