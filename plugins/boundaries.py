@@ -98,7 +98,7 @@ class BoundariesPlugin:
         # how often should we check for nearby generators (in seconds)
         self.GEN_CHECK_TIME = 1
 
-        self._next_boundary_entity_id: int | None = None
+        self._next_boundary_entity_id: int = 0
 
         if self.log_generators:
             self.create_task(self.loop_gen_check())
@@ -107,14 +107,8 @@ class BoundariesPlugin:
             self.create_task(self.loop_boundaries_check())
 
     def _allocate_boundary_entity_id(self: ProxhyPlugin) -> int:
-        if self._next_boundary_entity_id is None:
-            existing_ids = set(self.gamestate.entities.keys())
-            existing_ids.add(self.gamestate.player_entity_id)
-            self._next_boundary_entity_id = max(existing_ids, default=0) + 1
-
-        entity_id = self._next_boundary_entity_id
-        self._next_boundary_entity_id += 1
-        return entity_id
+        self._next_boundary_entity_id -= 1
+        return self._next_boundary_entity_id
 
     @subscribe(r"chat:server:The game starts in 1 second!")
     async def received_game_start_chat(self: ProxhyPlugin, match, buff: Buffer):
@@ -153,6 +147,8 @@ class BoundariesPlugin:
         except KeyError:
             self.logger.warning(f"Unknown map: '{self.game.map.name}'")
             return
+
+        self.initialize_all_boundaries()
 
     def game_recently_started(self: ProxhyPlugin, window: float = 5.0) -> bool:
         # game started less than `window` seconds ago
@@ -239,7 +235,7 @@ class BoundariesPlugin:
         diamond_centers = self.map_data["generators"]["diamond"]
 
         gen_centers: list[list[float]]
-        gen_centers = emerald_centers.extend(diamond_centers)
+        gen_centers = emerald_centers + diamond_centers
 
         boundary_corners: list[tuple[Pos, Pos]] = []
         for c in gen_centers:
@@ -856,6 +852,7 @@ class BoundariesPlugin:
 
     async def loop_boundaries_check(self: ProxhyPlugin):
         while True:
+            print("loop_boundaries_check")
             await asyncio.sleep(self.CHECK_BOUNDARIES_TIME)
             if (
                 not self.game.started
@@ -877,6 +874,7 @@ class BoundariesPlugin:
         return math.sqrt(dx**2 + dy**2 + dz**2)
 
     async def check_loaded_boundaries(self: ProxhyPlugin):
+        print("check_loaded_boundaries")
         # first initialize any un-initialized boundaries if they're loaded
         if not len(self.boundary_regions):
             return
@@ -891,23 +889,22 @@ class BoundariesPlugin:
 
             # now we have an uninitialized boundary region with both corners loaded
             # we can safely initialize its segments
-            r.initialize_segments()  # might be laggy but this is in a non-blocking task
+
+            # might be laggy but this is in a non-blocking task
+            await asyncio.to_thread(r.initialize_segments)
 
         # check if any boundaries are close enough to render them
-        player = self.gamestate.entities.get(self.gamestate.player_entity_id)
-        if player:
-            player_position = (player.position.x, player.position.y, player.position.z)
-        else:
-            self.logger.warning(
-                "Could not get own position! Aborting nearby boundary check..."
-            )
-            return
+        player_position = (
+            self.gamestate.position.x,
+            self.gamestate.position.y,
+            self.gamestate.position.z,
+        )
         for r in self.boundary_regions:
             if not r.initialized_segments:
                 continue
 
             dist_c1 = self.distance_to(player_position, tuple(r.c1))
-            dist_c2 = self.distance_to(player_position, tuple(r.c1))
+            dist_c2 = self.distance_to(player_position, tuple(r.c2))
 
             boundary_dist = min([dist_c1, dist_c2])
             if not r.displayed:
@@ -920,18 +917,111 @@ class BoundariesPlugin:
                 if boundary_dist > self.BOUNDARY_CULL_RADIUS:
                     await self.unrender_boundary(r)
 
-    async def render_boundary(self, region: BoundaryRegion):
+    async def render_boundary(self: ProxhyPlugin, region: BoundaryRegion):
         """Places all segments in a given boundary region in the world"""
+        print("render_boundary")
         if not region.initialized_segments:
             raise ValueError("Cannot render a boundary with uninitialized segments!")
 
+        for s in region:
+            rot, offset = self._get_segment_rotation_and_offsets(s)
+            position = (s.x + offset[0], s.y + offset[1], s.z + offset[2])
+            is_corner = s.corner != SegmentCorner.NOT_CORNER
+            await self.place_boundary_segment(position, is_corner, rot)
+
+        region.displayed = True
+
     async def unrender_boundary(self, region: BoundaryRegion):
         """Removes all segments in a given rendered boundary region in the world."""
+        pass
+
+    def _get_segment_rotation_and_offsets(
+        self: ProxhyPlugin, s: BoundarySegment
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """
+        Gets the pitch, yaw, roll of boundary segment, and the coordinate offset to apply.
+            Returns:
+                tuple[
+                    tuple[float, float, float]: pitch, yaw, roll (degrees)
+                    tuple[float, float, float]: coordinate offset (x, y, z)
+                ]
+        """
+
+        CORNER = SegmentCorner
+        DIR = SegmentDirection
+        SIDE = SegmentSide
+        FACE = BlockFace
+
+        def get_pitch() -> int:
+            if s.block_face == FACE.BOTTOM:
+                return 0
+            elif s.block_face != FACE.TOP:
+                return 90
+            else:
+                raise ValueError(f"Unknown behavior for face {s.block_face}!")
+
+        def get_yaw() -> int:
+            if s.corner == CORNER.NOT_CORNER:
+                # edge cases
+                state = (s.direction, s.side)
+                match state:
+                    case DIR.Z, SIDE.NEGATIVE:
+                        return 0
+                    case DIR.X, SIDE.NEGATIVE:
+                        return 90
+                    case DIR.Z, SIDE.POSITIVE:
+                        return 180
+                    case DIR.X, SIDE.POSITIVE:
+                        return 270
+                    case _:
+                        raise ValueError
+            else:
+                # corner cases
+                match s.corner:
+                    case CORNER.NEG_POS:
+                        return 0
+                    case CORNER.NEG_NEG:
+                        return 90
+                    case CORNER.POS_NEG:
+                        return 180
+                    case CORNER.POS_POS:
+                        return 270
+
+        def get_roll() -> int:
+            return 0
+
+        pitch = get_pitch()
+        yaw = get_yaw()
+        roll = get_roll()
+
+        p_rad = math.radians(pitch)
+        y_rad = math.radians(yaw)
+        r_rad = math.radians(roll)
+
+        sin, cos = math.sin, math.cos
+
+        partial = sin(p_rad) * sin(y_rad)
+        x_offset = -0.25 * (partial * cos(r_rad) - cos(p_rad) * sin(r_rad))
+        y_offset = 0.25 * (1 - (partial * sin(r_rad) + cos(p_rad) * cos(r_rad)))
+        z_offset = -0.25 * sin(p_rad) * cos(y_rad)
+
+        return ((pitch, yaw, roll), (x_offset, y_offset, z_offset))
+
+    # DEVELOPER DEBUG COMMAND; REMOVE LATER
+    @command("place_boundary_here")
+    async def place_boundary_here(self: ProxhyPlugin, pitch, yaw, roll):
+        player_position = (
+            self.gamestate.position.x,
+            self.gamestate.position.y,
+            self.gamestate.position.z,
+        )
+        rot = (float(pitch), float(yaw), float(roll))
+        await self.place_boundary_segment(player_position, False, rot)
 
     async def place_boundary_segment(
         self: ProxhyPlugin,
         pos: tuple[float, float, float],
-        b_type: Literal["corner", "edge"],
+        is_corner: bool,
         rot: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ):
         # good edge case test maps for final boundary implementation:
@@ -975,7 +1065,7 @@ class BoundariesPlugin:
         )
 
         # entity equipment packet
-        metadata = 0 if b_type == "edge" else 1
+        metadata = 0 if is_corner else 1
         self.downstream.send_packet(
             0x04,
             VarInt.pack(entity_id),
@@ -1203,6 +1293,9 @@ class BoundaryRegion:
         self.displayed: bool = False
         self.segments: list[BoundarySegment] = []
 
+    def __iter__(self):
+        yield from self.segments
+
     def validate_ids(self, ids: list[int]) -> None:
         if not all(0 <= i <= 7 for i in ids):
             raise ValueError("Invalid id received; must be int literal 0 through 7.")
@@ -1220,19 +1313,21 @@ class BoundaryRegion:
         return out
 
     def initialize_segments(self):
+        print("Initializing segments...")
         chains = self.compute_boundary_segments()
         self.segments = [
             segment for boundary_chain in chains for segment in boundary_chain
         ]
         self.initialized_segments = True
+        print(f"Finished initializing segments with {len(self.segments)} segments.")
 
     def compute_boundary_segments(self) -> list[BoundaryChain]:
         min_x_face = [0, 1, 2, 3]
         max_x_face = [4, 5, 6, 7]
-        min_y_face = [0, 1, 4, 5]
-        max_y_face = [2, 3, 6, 7]
+        min_z_face = [0, 2, 4, 6]
+        max_z_face = [1, 3, 5, 7]
 
-        faces = [min_x_face, max_x_face, min_y_face, max_y_face]
+        faces = [min_x_face, max_x_face, min_z_face, max_z_face]
         chains: dict[BoundaryFace, list[BoundaryChain]] = {}
 
         for id, f in enumerate(faces):
