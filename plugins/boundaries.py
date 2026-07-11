@@ -71,6 +71,9 @@ class BoundariesPlugin:
         self.log_generators = True
         self.output_generator_logs = True
 
+        # TODO: make this into a setting
+        self.render_boundaries = True
+
         # chat notifications for developer data collection pipelines
         self.send_chat_notifs = True
 
@@ -80,10 +83,7 @@ class BoundariesPlugin:
         # based on direction facing when you spawned in
         self.boundary_corner_1 = Pos(0, 0, 0)
         self.boundary_corner_2 = Pos(0, 0, 0)
-        self.total_boundaries = 0
-
-        # TODO: make this into a setting
-        self.render_boundaries = True
+        self.n_total_boundaries = 0
 
         # max number of blocks away to show boundary
         # TODO: make this into a setting(?)
@@ -139,16 +139,16 @@ class BoundariesPlugin:
             self.map_data["generators"].setdefault("emerald", [])
             self.map_data["generators"].setdefault("diamond", [])
 
-            self.total_boundaries = (
-                len(self.map_data["generators"]["emerald"])
-                + len(self.map_data["generators"]["diamond"])
-                + len(self.map_data["spawnpoints"])
-            )
         except KeyError:
             self.logger.warning(f"Unknown map: '{self.game.map.name}'")
             return
-
-        self.initialize_all_boundaries()
+        if self.render_boundaries:
+            self.n_total_boundaries = (
+                len(self.map_data["generators"]["emerald"])
+                + len(self.map_data["generators"]["diamond"])
+                + len(self.map_data.get("spawnpoints"))
+            )
+            self.initialize_all_boundaries()
 
     def game_recently_started(self: ProxhyPlugin, window: float = 5.0) -> bool:
         # game started less than `window` seconds ago
@@ -695,7 +695,9 @@ class BoundariesPlugin:
         if prev is None:
             prev_tc = TextComponent("None").color("red")
         else:
-            prev_tc = TextComponent(f"{prev['corner1']} -> {prev['corner2']}")
+            prev_tc = TextComponent(
+                f"({prev['corner1'][0]}, {prev['corner1'][1]}, {prev['corner1'][2]}) -> {prev['corner2'][0]}, {prev['corner2'][1]}, {prev['corner2'][2]}"
+            )
 
         self.map_data.setdefault("boundary", {})
         self.map_data["boundary"]["corner1"] = corner1
@@ -722,11 +724,11 @@ class BoundariesPlugin:
             msg_new = (
                 TextComponent("New Boundary: ")
                 .color("white")
-                .append(TextComponent(corner1))
+                .append(TextComponent(f"({corner1[0]}, {corner1[1]}, {corner1[2]})"))
                 .color("yellow")
                 .append(TextComponent(" -> "))
                 .color("white")
-                .append(TextComponent(corner2))
+                .append(TextComponent(({corner2[0]}, {corner2[1]}, {corner2[2]})))
                 .color("yellow")
             )
             self.downstream.chat(
@@ -758,7 +760,6 @@ class BoundariesPlugin:
     async def loop_gen_check(self: ProxhyPlugin):
         while True:
             await asyncio.sleep(self.GEN_CHECK_TIME)
-            # print("Looping...")
             if (
                 not self.game.started
                 or self.game.gametype != "bedwars"
@@ -806,7 +807,6 @@ class BoundariesPlugin:
                         20,
                         f"Wrote new diamond generator for {self.game.map.name.upper()} at {pos_list}.",
                     )
-                # print(f"Found diamond gen at {pos_list}")
 
             elif "emerald" in name_text.casefold():
                 updated = True
@@ -816,7 +816,6 @@ class BoundariesPlugin:
                         20,
                         f"Wrote new emerald generator for {self.game.map.name.upper()} at {pos_list}.",
                     )
-                # print(f"Found emerald gen at {pos_list}")
         if updated:
             n_teams = self.get_bedwars_team_count()
             n_emerald = 2 if n_teams in {2, 4} else 4
@@ -852,13 +851,12 @@ class BoundariesPlugin:
 
     async def loop_boundaries_check(self: ProxhyPlugin):
         while True:
-            print("loop_boundaries_check")
             await asyncio.sleep(self.CHECK_BOUNDARIES_TIME)
             if (
                 not self.game.started
                 or self.game.gametype != "bedwars"
                 or not hasattr(self, "map_data")
-                or len(self.boundary_regions) == self.total_boundaries
+                or len(self.boundary_regions) == self.n_total_boundaries
             ):
                 continue
             await self.check_loaded_boundaries()
@@ -874,7 +872,6 @@ class BoundariesPlugin:
         return math.sqrt(dx**2 + dy**2 + dz**2)
 
     async def check_loaded_boundaries(self: ProxhyPlugin):
-        print("check_loaded_boundaries")
         # first initialize any un-initialized boundaries if they're loaded
         if not len(self.boundary_regions):
             return
@@ -1373,7 +1370,10 @@ class BoundaryRegion:
         # visit link below for a diagram to visualize this logic
         # https://drive.google.com/file/d/1Za_EJ_lQwuy1oSvR9RPwjHllaXweApbR/view?usp=sharing
         if (
-            seg1.side != seg2.side
+            (
+                seg1.side != seg2.side
+                and SegmentSide.CORNER not in {seg1.side, seg2.side}
+            )
             or (
                 seg1.direction != seg2.direction
                 and SegmentDirection.CORNER not in {seg1.direction, seg2.direction}
@@ -1395,6 +1395,14 @@ class BoundaryRegion:
                 direction = seg1.direction
         else:
             direction = seg1.direction
+
+        if seg1.side != seg2.side:
+            if seg1.side is SegmentSide.CORNER:
+                side = seg2.side
+            else:
+                side = seg1.side
+        else:
+            side = seg1.side
 
         face: BlockFace
         lower = seg1 if seg1.y < seg2.y else seg2
@@ -1418,7 +1426,7 @@ class BoundaryRegion:
             lower.y,
             lower.z,
             direction,
-            seg1.side,
+            side,
             lower.type,
             block_face=face,
         )
