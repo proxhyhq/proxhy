@@ -39,6 +39,7 @@ from petty.protocol.datatypes import (
     VarInt,
 )
 from proxhy import utils
+from proxhy.session import http_client
 from proxhy.utils import Cache
 
 if TYPE_CHECKING:
@@ -478,9 +479,7 @@ class LoginPlugin:
         motd = "§7Couldn't get Proxhy player count!"
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get("https://compass.proxhy.com/player_count")
-
+            response = await http_client.get("https://compass.proxhy.com/player_count")
             int(response.text)
         except httpx.HTTPError as e:
             self.logger.warning(f"failed to fetch proxhy player count: {e}")

@@ -13,6 +13,7 @@ from platformdirs import user_log_path
 
 import mcauth as auth
 from petty.endpoints import Proxy
+from proxhy import session
 from proxhy.proxhy import Proxhy
 from proxhy.utils import zero_pad_calver
 
@@ -206,6 +207,8 @@ async def shutdown(loop: asyncio.AbstractEventLoop, server: ProxhyServer, _):
     if server.num_cancels > 1:
         print("\nForcing shutdown...", end=" ", flush=True)
         close_tasks = [instance.close(force=True) for instance in instances]
+        close_tasks.append(session.http_client.aclose())
+
         if close_tasks:
             try:
                 await asyncio.wait_for(
@@ -285,6 +288,7 @@ async def shutdown(loop: asyncio.AbstractEventLoop, server: ProxhyServer, _):
         print("Shutting down...", end=" ", flush=True)
         server.close()
         await server.wait_closed()
+        await session.http_client.aclose()
         print("done!")
 
     loop.stop()
