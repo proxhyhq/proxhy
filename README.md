@@ -81,7 +81,7 @@ After opening the Proxhy app, press the "Start" button in the top-left corner. T
 The easiest way to run Proxhy is to use [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uvx --index=https://proxhyhq.github.io/proxhy/simple proxhy
+uvx --index=https://index.proxhy.com proxhy
 ```
 
 This will fetch the latest Proxhy release and run it. To update, simply rerun the command. By default, this connects to `mc.hypixel.net:25565` and binds to `localhost:41223`.
@@ -89,7 +89,7 @@ This will fetch the latest Proxhy release and run it. To update, simply rerun th
 You can also install Proxhy with uv:
 
 ```bash
-uv tool install --index=https://proxhyhq.github.io/proxhy/simple proxhy
+uv tool install --index=https://index.proxhy.com proxhy
 ```
 
 ### CLI Options
