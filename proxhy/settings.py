@@ -101,19 +101,6 @@ class TablistGroup(SettingGroup):
             storage=storage,
         )
 
-        self.show_seraph_warnings: Setting[Literal["OFF", "ON"]] = create_setting(
-            key="bedwars.tablist.show_seraph_warnings",
-            display_name="Show Seraph Warnings",
-            description="In Bedwars, appends [BL] or [BOT] next to players flagged on Seraph. Requires a Seraph API key (/key seraph).",
-            item="minecraft:banner",
-            states={
-                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
-                "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
-            },
-            default_state="OFF",
-            storage=storage,
-        )
-
 
 class VisualGroup(SettingGroup):
     def __init__(self, storage: SettingsStorage):
