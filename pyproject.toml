@@ -10,10 +10,12 @@ dependencies = [
   "httpx>=0.28.1",
   "hypixel-py>=0.4.2",
   "keyring>=25.6",
+  "mcauth",
   "numba>=0.63.1",
   "numpy>=2.3.3",
   "orjson>=3.11.7",
   "packaging>=26.2",
+  "petty",
   "platformdirs>=4.3",
   "pyjwt>=2.10",
   "pyroh>=0.4.2",
@@ -60,6 +62,6 @@ where = ["."]
 members = ["mcauth", "petty", "compass"]
 
 [tool.uv.sources]
-mcauth = { workspace = true }
-petty = { workspace = true }
 compass = { workspace = true }
+petty = { workspace = true }
+mcauth = { workspace = true }
