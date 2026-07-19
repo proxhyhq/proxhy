@@ -3,8 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
+# C extensions / Rust extension modules
 *.so
+*.dylib
+*.pyd
 
 # Distribution / packaging
 .Python

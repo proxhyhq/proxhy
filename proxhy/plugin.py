@@ -1,6 +1,7 @@
 import logging
 
 from petty.endpoints import Proxy
+
 from plugins.autoboop import AutoboopPlugin
 from plugins.broadcaster import BroadcastPlugin
 from plugins.chat import ChatPlugin

@@ -5,9 +5,6 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 import hypixel
 import numba
 import numpy as np
-
-from gamestate.state import Entity, Player, PlayerAbilityFlags, Rotation, Vec3d
-from petty import nbt
 from petty.events import listen_client as listen
 from petty.events import subscribe
 from petty.protocol.datatypes import (
@@ -26,6 +23,9 @@ from petty.protocol.datatypes import (
     UnsignedByte,
     VarInt,
 )
+
+from gamestate.state import Entity, Player, PlayerAbilityFlags, Rotation, Vec3d
+from petty import nbt
 from plugins.commands import CommandException, command
 from plugins.window import Window
 from proxhy.argtypes import ServerPlayer

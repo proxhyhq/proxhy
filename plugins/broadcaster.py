@@ -8,16 +8,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pyroh
-
-from broadcasting.plugin import BroadcastPeerPlugin
-from broadcasting.proxy import BroadcastPeerProxy
-from broadcasting.transform import (
-    PlayerTransformer,
-    build_player_list_add_packet,
-    build_spawn_player_packet,
-)
-from compass import RequestFailure
-from gamestate.state import Vec3d
 from petty.endpoints import Proxy
 from petty.events import listen_server, subscribe
 from petty.net import State
@@ -33,6 +23,16 @@ from petty.protocol.datatypes import (
     TextComponent,
     VarInt,
 )
+
+from broadcasting.plugin import BroadcastPeerPlugin
+from broadcasting.proxy import BroadcastPeerProxy
+from broadcasting.transform import (
+    PlayerTransformer,
+    build_player_list_add_packet,
+    build_spawn_player_packet,
+)
+from compass import RequestFailure
+from gamestate.state import Vec3d
 from plugins.commands import CommandException, CommandGroup, Lazy, command
 from proxhy.argtypes import BroadcastPlayer, MojangPlayer
 from proxhy.p2p import StreamIntent

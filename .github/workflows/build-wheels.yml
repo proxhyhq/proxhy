@@ -1,0 +1,86 @@
+name: Build petty wheels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "petty/**"
+      - ".github/workflows/build-wheels.yml"
+  pull_request:
+    paths:
+      - "petty/**"
+      - ".github/workflows/build-wheels.yml"
+
+jobs:
+  build-wheels:
+    name: Build ${{ matrix.target }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: auto
+          # Linux aarch64 (cross)
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            manylinux: auto
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            manylinux: "off"
+          # Windows aarch64 (cross)
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            manylinux: "off"
+          # macOS universal (fat binary)
+          - os: macos-latest
+            target: universal2-apple-darwin
+            manylinux: "off"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # Cache key includes uv.lock AND Cargo.lock so Rust changes correctly
+      # invalidate the venv (maturin editable installs write .so files into it).
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            petty/Cargo.lock
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Keyed on Cargo.lock + OS + target triple so cross-compiled artefacts
+      # don't poison native-build caches.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: petty -> petty/target
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: >-
+            --release
+            --manifest-path petty/Cargo.toml
+            --target ${{ matrix.target }}
+            --out dist
+            --interpreter python3.14
+          manylinux: ${{ matrix.manylinux }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error

@@ -14,3 +14,25 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
+      - id: cargo-fmt
+        name: cargo fmt (petty)
+        entry: cargo fmt --manifest-path petty/Cargo.toml --
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy (petty)
+        entry: cargo clippy --manifest-path petty/Cargo.toml --no-default-features --lib -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: check-stubs-fresh
+        name: check _petty stubs are up to date
+        entry: bash -c 'cargo run --manifest-path petty/Cargo.toml --bin stub_gen --no-default-features --quiet && git diff --exit-code petty/python/petty/_petty/__init__.pyi'
+        language: system
+        types: [rust]
+        stages: [pre-push]
+        pass_filenames: false

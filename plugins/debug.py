@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 from petty.protocol.datatypes import TextComponent
+
 from plugins.commands import command
 
 if TYPE_CHECKING:

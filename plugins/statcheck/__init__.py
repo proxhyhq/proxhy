@@ -20,9 +20,6 @@ from hypixel import (
     RateLimitError,
     TimeoutError,
 )
-from platformdirs import user_cache_dir
-
-from assets import load_json_asset
 from petty.events import listen_server, subscribe
 from petty.protocol.datatypes import (
     UUID,
@@ -34,6 +31,9 @@ from petty.protocol.datatypes import (
     TextComponent,
     VarInt,
 )
+from platformdirs import user_cache_dir
+
+from assets import load_json_asset
 from plugins.commands import CommandException, command
 from proxhy.secrets import delete_secret, get_secret, set_secret
 from proxhy.utils import offline_uuid
