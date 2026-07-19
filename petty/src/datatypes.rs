@@ -31,6 +31,33 @@ fn mk_bytes(py: Python<'_>, data: &[u8]) -> Py<PyBytes> {
     PyBytes::new(py, data).unbind()
 }
 
+/// Encode `value` as a VarInt directly into `out`, with no intermediate
+/// Python object. Used internally by every `pack` that needs a length
+/// prefix, so only the final result allocates a `PyBytes`.
+fn write_varint(out: &mut Vec<u8>, value: i32) {
+    let mut val = if value < 0 {
+        (1u64 << 32).wrapping_add(value as u64)
+    } else {
+        value as u64
+    };
+    while val >= 0x80 {
+        out.push(0x80 | (val & 0x7F) as u8);
+        val >>= 7;
+    }
+    out.push((val & 0x7F) as u8);
+}
+
+/// VarInt length prefix + UTF-8 bytes, as raw bytes (no `PyBytes` wrapping) —
+/// lets callers that build on top of a packed string (e.g. `Chat::pack`)
+/// append further data before allocating exactly one final `PyBytes`.
+fn pack_string_bytes(value: &str) -> Vec<u8> {
+    let encoded = value.as_bytes();
+    let mut out = Vec::with_capacity(encoded.len() + 5);
+    write_varint(&mut out, encoded.len() as i32);
+    out.extend_from_slice(encoded);
+    out
+}
+
 // ── VarInt ────────────────────────────────────────────────────────────────────
 
 #[gen_stub_pyclass]
@@ -43,16 +70,7 @@ impl VarInt {
     #[staticmethod]
     pub fn pack(py: Python<'_>, value: i32) -> Py<PyBytes> {
         let mut buf = Vec::with_capacity(5);
-        let mut val = if value < 0 {
-            (1u64 << 32).wrapping_add(value as u64)
-        } else {
-            value as u64
-        };
-        while val >= 0x80 {
-            buf.push(0x80 | (val & 0x7F) as u8);
-            val >>= 7;
-        }
-        buf.push((val & 0x7F) as u8);
+        write_varint(&mut buf, value);
         mk_bytes(py, &buf)
     }
 
@@ -208,10 +226,8 @@ pub struct ByteArray;
 impl ByteArray {
     #[staticmethod]
     pub fn pack(py: Python<'_>, value: Vec<u8>) -> Py<PyBytes> {
-        let len_encoded = VarInt::pack(py, value.len() as i32);
-        let len_bytes = len_encoded.bind(py).as_bytes();
-        let mut out = Vec::with_capacity(len_bytes.len() + value.len());
-        out.extend_from_slice(len_bytes);
+        let mut out = Vec::with_capacity(value.len() + 5);
+        write_varint(&mut out, value.len() as i32);
         out.extend_from_slice(&value);
         mk_bytes(py, &out)
     }
@@ -410,13 +426,7 @@ pub struct PettyString;
 impl PettyString {
     #[staticmethod]
     pub fn pack(py: Python<'_>, value: &str) -> Py<PyBytes> {
-        let encoded = value.as_bytes();
-        let len_py = VarInt::pack(py, encoded.len() as i32);
-        let len_bytes = len_py.bind(py).as_bytes();
-        let mut out = Vec::with_capacity(len_bytes.len() + encoded.len());
-        out.extend_from_slice(len_bytes);
-        out.extend_from_slice(encoded);
-        mk_bytes(py, &out)
+        mk_bytes(py, &pack_string_bytes(value))
     }
     #[staticmethod]
     pub fn unpack(buff: &Bound<'_, PyAny>) -> PyResult<String> {
@@ -429,7 +439,7 @@ impl PettyString {
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
-use crate::models::TextComponent;
+use crate::models::{TextComponent, json_escape_into, json_stringify, orjson_module};
 
 #[gen_stub_pyclass]
 #[pyclass(name = "Chat")]
@@ -440,36 +450,28 @@ pub struct Chat;
 impl Chat {
     #[staticmethod]
     pub fn pack(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyBytes>> {
-        let json_str: String = if let Ok(tc) = value.extract::<PyRef<TextComponent>>() {
-            tc.to_json_str()
-        } else if let Ok(s) = value.extract::<String>() {
-            format!(r#"{{"text":"{}"}}"#, s.replace('"', r#"\""#))
-        } else {
-            // dict or anything else: use orjson
-            let orjson = py.import("orjson")?;
-            let dumped: Vec<u8> = orjson.call_method1("dumps", (value,))?.extract()?;
-            String::from_utf8(dumped)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
-        };
-        Ok(PettyString::pack(py, &json_str))
+        let json_str = chat_json_string(value)?;
+        Ok(mk_bytes(py, &pack_string_bytes(&json_str)))
     }
 
     /// Pack with trailing position byte `0x00` (chat message position).
     #[staticmethod]
     pub fn pack_msg(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyBytes>> {
-        let packed = Chat::pack(py, value)?;
-        let mut out = packed.bind(py).as_bytes().to_vec();
+        let json_str = chat_json_string(value)?;
+        let mut out = pack_string_bytes(&json_str);
         out.push(0x00);
         Ok(mk_bytes(py, &out))
     }
 
     /// Unpack to plain text string (strips §-colour codes).
     #[staticmethod]
-    pub fn unpack(py: Python<'_>, buff: &Bound<'_, PyAny>) -> PyResult<String> {
+    pub fn unpack(buff: &Bound<'_, PyAny>) -> PyResult<String> {
         let json_str = PettyString::unpack(buff)?;
-        let orjson = py.import("orjson")?;
-        let data = orjson.call_method1("loads", (json_str.as_str(),))?;
-        let text = chat_to_plain_text(&data)?;
+        // Parsed with serde_json (pure Rust) instead of orjson.loads, since we only need
+        // to walk it for text — no Python object graph needs to be built for this path.
+        let data: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let text = chat_json_to_plain_text(&data);
         Ok(strip_section_codes(&text))
     }
 
@@ -477,45 +479,53 @@ impl Chat {
     #[staticmethod]
     pub fn unpack_component(py: Python<'_>, buff: &Bound<'_, PyAny>) -> PyResult<TextComponent> {
         let json_str = PettyString::unpack(buff)?;
-        let orjson = py.import("orjson")?;
+        let orjson = orjson_module(py)?;
         let data = orjson.call_method1("loads", (json_str.as_str(),))?;
         Ok(TextComponent::from_py_data(data.unbind()))
     }
 }
 
-pub(crate) fn chat_to_plain_text(data: &Bound<'_, PyAny>) -> PyResult<String> {
-    use pyo3::types::{PyDict, PyList};
+fn chat_json_string(value: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(s) = value.extract::<String>() {
+        let mut out = String::with_capacity(s.len() + 10);
+        out.push_str(r#"{"text":"#);
+        json_escape_into(&mut out, &s);
+        out.push('}');
+        Ok(out)
+    } else {
+        // TextComponent, dict, or anything else: walk it natively (no orjson round-trip).
+        json_stringify(value)
+    }
+}
+
+fn chat_json_to_plain_text(data: &serde_json::Value) -> String {
     let mut text = String::new();
-    if let Ok(s) = data.extract::<String>() {
-        return Ok(s);
-    }
-    if let Ok(list) = data.cast::<PyList>() {
-        for item in list {
-            text.push_str(&chat_to_plain_text(&item)?);
+    match data {
+        serde_json::Value::String(s) => return s.clone(),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                text.push_str(&chat_json_to_plain_text(item));
+            }
+            return text;
         }
-        return Ok(text);
-    }
-    if let Ok(dict) = data.cast::<PyDict>() {
-        if let Some(t) = dict.get_item("translate")? {
-            text.push_str(&t.extract::<String>()?);
-            if let Some(with) = dict.get_item("with")?
-                && let Ok(list) = with.cast::<PyList>()
-            {
-                let parts: Vec<String> = list
-                    .iter()
-                    .map(|a| chat_to_plain_text(&a))
-                    .collect::<PyResult<_>>()?;
-                text.push_str(&parts.join(", "));
+        serde_json::Value::Object(map) => {
+            if let Some(t) = map.get("translate").and_then(|v| v.as_str()) {
+                text.push_str(t);
+                if let Some(with) = map.get("with").and_then(|v| v.as_array()) {
+                    let parts: Vec<String> = with.iter().map(chat_json_to_plain_text).collect();
+                    text.push_str(&parts.join(", "));
+                }
+            }
+            if let Some(t) = map.get("text").and_then(|v| v.as_str()) {
+                text.push_str(t);
+            }
+            if let Some(extra) = map.get("extra") {
+                text.push_str(&chat_json_to_plain_text(extra));
             }
         }
-        if let Some(t) = dict.get_item("text")? {
-            text.push_str(&t.extract::<String>()?);
-        }
-        if let Some(extra) = dict.get_item("extra")? {
-            text.push_str(&chat_to_plain_text(&extra)?);
-        }
+        _ => {}
     }
-    Ok(text)
+    text
 }
 
 pub(crate) fn strip_section_codes(s: &str) -> String {

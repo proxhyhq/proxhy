@@ -2,11 +2,105 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyType};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyType};
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
+
+// ── cached `orjson` module handle ───────────────────────────────────────────
+// `py.import("orjson")` does a sys.modules lookup + attribute walk on every
+// call; caching it once per process avoids paying that on every Chat pack.
+
+static ORJSON: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+
+pub(crate) fn orjson_module(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
+    let module = ORJSON.get_or_try_init(py, || -> PyResult<Py<PyModule>> {
+        Ok(py.import("orjson")?.unbind())
+    })?;
+    Ok(module.bind(py))
+}
+
+// ── native JSON serialisation ────────────────────────────────────────────────
+// TextComponent.data is always built from our own dict/list/str/bool setters,
+// so we can walk it and emit JSON directly instead of round-tripping through
+// orjson.dumps (a Python-level call) on every Chat pack.
+
+pub(crate) fn json_escape_into(out: &mut String, s: &str) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+// Recursive walker. Deliberately does *not* check for a nested `TextComponent`:
+// `.data` is only ever built through our own setters, which normalise any
+// `TextComponent` argument to a plain dict before storing it (see
+// `normalize_component`), so a raw `TextComponent` can only appear as the
+// outermost value passed to `Chat.pack` — handled once in `json_stringify`.
+// Branch order matters: string is by far the most common value in a chat
+// component, so it's checked first; bool must precede int since `bool`
+// is a subtype of `int` in Python.
+pub(crate) fn json_stringify_into(out: &mut String, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    if let Ok(s) = value.cast::<PyString>() {
+        json_escape_into(out, s.to_str()?);
+    } else if value.is_instance_of::<PyBool>() {
+        out.push_str(if value.extract::<bool>()? {
+            "true"
+        } else {
+            "false"
+        });
+    } else if value.is_instance_of::<PyInt>() {
+        out.push_str(&value.extract::<i64>()?.to_string());
+    } else if value.is_instance_of::<PyFloat>() {
+        out.push_str(&value.extract::<f64>()?.to_string());
+    } else if value.is_none() {
+        out.push_str("null");
+    } else if let Ok(dict) = value.cast::<PyDict>() {
+        out.push('{');
+        for (i, (k, v)) in dict.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            json_escape_into(out, k.cast::<PyString>()?.to_str()?);
+            out.push(':');
+            json_stringify_into(out, &v)?;
+        }
+        out.push('}');
+    } else if let Ok(list) = value.cast::<PyList>() {
+        out.push('[');
+        for (i, item) in list.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            json_stringify_into(out, &item)?;
+        }
+        out.push(']');
+    } else {
+        json_escape_into(out, &value.str()?.to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn json_stringify(value: &Bound<'_, PyAny>) -> PyResult<String> {
+    let mut out = String::new();
+    if let Ok(tc) = value.extract::<PyRef<TextComponent>>() {
+        json_stringify_into(&mut out, tc.data.bind(value.py()))?;
+    } else {
+        json_stringify_into(&mut out, value)?;
+    }
+    Ok(out)
+}
 
 // ── Item mapping ──────────────────────────────────────────────────────────────
 
@@ -277,16 +371,8 @@ impl TextComponent {
         TextComponent { data }
     }
 
-    pub fn to_json_str(&self) -> String {
-        Python::attach(|py| {
-            let orjson = py.import("orjson").expect("orjson not installed");
-            let dumped: Vec<u8> = orjson
-                .call_method1("dumps", (&self.data,))
-                .expect("orjson dumps failed")
-                .extract()
-                .expect("extract failed");
-            String::from_utf8(dumped).expect("not utf8")
-        })
+    pub fn to_json_str(&self, py: Python<'_>) -> String {
+        json_stringify(self.data.bind(py)).expect("TextComponent.data should be JSON-serialisable")
     }
 }
 
@@ -877,7 +963,7 @@ impl TextComponent {
     // ── utility ───────────────────────────────────────────────────────────────
 
     pub fn copy(&self, py: Python<'_>) -> PyResult<TextComponent> {
-        let orjson = py.import("orjson")?;
+        let orjson = orjson_module(py)?;
         let dumped: Vec<u8> = orjson.call_method1("dumps", (&self.data,))?.extract()?;
         let data = orjson.call_method1("loads", (dumped.as_slice(),))?;
         Ok(TextComponent {
@@ -890,8 +976,8 @@ impl TextComponent {
         Ok(dict.into_any().unbind())
     }
 
-    pub fn to_json(&self) -> String {
-        TextComponent::to_json_str(self)
+    pub fn to_json(&self, py: Python<'_>) -> String {
+        TextComponent::to_json_str(self, py)
     }
 
     pub fn is_empty(&self, py: Python<'_>) -> PyResult<bool> {
@@ -914,8 +1000,8 @@ impl TextComponent {
         }
     }
 
-    fn __repr__(&self) -> String {
-        format!("TextComponent({})", TextComponent::to_json_str(self))
+    fn __repr__(&self, py: Python<'_>) -> String {
+        format!("TextComponent({})", TextComponent::to_json_str(self, py))
     }
 
     fn __str__(&self, py: Python<'_>) -> PyResult<String> {
