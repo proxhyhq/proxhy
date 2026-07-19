@@ -8,7 +8,6 @@ from asyncio import StreamReader, StreamWriter
 
 import httpx
 import pyroh
-
 from petty.endpoints import Client
 from petty.events import listen_client as listen
 from petty.net import State

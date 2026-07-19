@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 from unittest.mock import Mock
 
 import orjson
-
 from gamestate.state import PlayerAbilityFlags
 from petty.events import listen_client as listen
 from petty.events import subscribe
@@ -27,6 +26,7 @@ from petty.protocol.datatypes import (
     UnsignedShort,
     VarInt,
 )
+
 from proxhy.utils import APIClient, offline_uuid, uuid_version
 
 if TYPE_CHECKING:
@@ -103,7 +103,7 @@ class BroadcastPeerLoginPlugin:
                 PlayerAbilityFlags.INVULNERABLE | self.flying | self.flight
             )
         else:
-            self.flying = 0
+            self.flying = PlayerAbilityFlags(0)
             # INVULNERABLE | ALLOW_FLYING
             abilities_flags = int(PlayerAbilityFlags.INVULNERABLE | self.flight)
 

@@ -1,0 +1,30 @@
+#:tombi schema.strict = false
+
+[project]
+name = "gamestate"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=2.0",
+  "petty",
+]
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "gamestate._gamestate"
+python-source = "."
+# Auto-generate Python type stubs
+generate-import-lib = true
+
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "Cargo.toml" },
+  { file = "Cargo.lock" },
+  { file = "src/**/*.rs" },
+  { file = "gamestate/**/*.py" },
+]

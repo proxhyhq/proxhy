@@ -7,8 +7,16 @@ from typing import Any, Protocol
 
 import orjson
 
-from petty import nbt
-from petty.models import Item, Pos, SlotData, TextComponent
+from petty.models import (  # noqa: F401
+    Color_T,
+    DisplayName,
+    Item,
+    ItemID,
+    ItemName,
+    Pos,
+    SlotData,
+    TextComponent,
+)
 
 
 class AsyncReader[T](Protocol):
@@ -304,81 +312,20 @@ class Angle(DataType[float, float]):
         return 360 * buff.unpack(UnsignedByte) / 256
 
 
+from petty._petty import py_slot_pack as _rs_slot_pack  # noqa: E402
+from petty._petty import py_slot_unpack as _rs_slot_unpack  # noqa: E402
+
+
 class Slot(DataType[SlotData, SlotData]):
     @staticmethod
     def pack(value: SlotData) -> bytes:
-        if value.item is None:
-            return Short.pack(-1)
-
-        if not value.nbt:
-            return (
-                Short.pack(value.item.id)
-                + Byte.pack(value.count)
-                + Short.pack(value.damage)
-                + Byte.pack(0)
-            )
-        else:
-            return (
-                Short.pack(value.item.id)
-                + Byte.pack(value.count)
-                + Short.pack(value.damage)
-                + value.nbt
-            )
+        return bytes(_rs_slot_pack(value))
 
     @staticmethod
     def unpack(buff: Buffer) -> SlotData:
-        item_id = buff.unpack(Short)
-        if item_id == -1:
-            return SlotData()
-
-        count = buff.unpack(Byte)
-        damage = buff.unpack(Short)
-
-        nbt_data = Slot._read_nbt(buff)
-
-        item = Item.from_id(item_id)
-
-        if item is None:
-            return SlotData()
-
-        return SlotData(item, count, damage, nbt_data)
-
-    @staticmethod
-    def _read_nbt(buff: Buffer) -> bytes:
-        """Read NBT data from buffer and return the raw bytes"""
-        start_pos = buff.tell()
-
-        # Peek at tag type
-        tag_type_byte = buff.read(1)
-        if not tag_type_byte or tag_type_byte[0] == 0:
-            # TAG_End or empty - no NBT data
-            return b""
-
-        # Reset to start and read the full NBT structure using the nbt library
-        buff.seek(start_pos)
-
-        # Read enough bytes to parse the NBT - we'll use the NBTReader to determine the size
-        # First, get all remaining bytes from current position
-        remaining_data = buff.read()
-        buff.seek(start_pos)
-
-        if not remaining_data:
-            return b""
-
-        try:
-            # Use NBTReader to parse and determine exact size
-            reader = nbt.NBTReader(remaining_data)
-            reader.read_root()  # This will parse the NBT structure
-
-            # The reader's internal BytesIO position tells us how many bytes were consumed
-            bytes_consumed = reader.data.tell()
-
-            # Now read exactly that many bytes from the original buffer
-            nbt_data = buff.read(bytes_consumed)
-            return nbt_data
-
-        except nbt.NBTError, Exception:
-            # If parsing fails, assume no NBT data
-            buff.seek(start_pos)
-            buff.read(1)  # Consume the tag type byte we already read
-            return b""
+        # Read all remaining bytes, parse in Rust, then advance buffer
+        start = buff.tell()
+        remaining = buff.getvalue()[start:]
+        slot, consumed = _rs_slot_unpack(remaining)
+        buff.seek(start + consumed)
+        return slot

@@ -5,9 +5,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 import hypixel
 import numba
 import numpy as np
-
 from gamestate.state import Entity, Player, PlayerAbilityFlags, Rotation, Vec3d
-from petty import nbt
 from petty.events import listen_client as listen
 from petty.events import subscribe
 from petty.protocol.datatypes import (
@@ -26,6 +24,8 @@ from petty.protocol.datatypes import (
     UnsignedByte,
     VarInt,
 )
+
+from petty import nbt
 from plugins.commands import CommandException, command
 from plugins.window import Window
 from proxhy.argtypes import ServerPlayer
@@ -34,6 +34,9 @@ from proxhypixel.formatting import get_rankname
 
 if TYPE_CHECKING:
     from broadcasting.plugin import BroadcastPeerPlugin
+
+_RED_PANE = Item.from_display_name("Red Stained Glass Pane")
+assert _RED_PANE
 
 
 @numba.njit(cache=True, fastmath=True)
@@ -445,9 +448,7 @@ class PlayerSpectateWindow(Window):
         def _or_glass_pane(sd: SlotData, display_name: str) -> SlotData:
             nsd = SlotData(
                 item=Item.from_name("minecraft:stained_glass_pane"),
-                damage=Item.from_display_name(
-                    "Red Stained Glass Pane"
-                ).data,  # ts some bs why is it the damage field
+                damage=_RED_PANE.data,  # ts some bs why is it the damage field
                 nbt=nbt.dumps(
                     nbt.from_dict(
                         {

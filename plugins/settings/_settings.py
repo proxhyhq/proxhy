@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import orjson
-
 from petty.protocol.datatypes import Item
 
 if TYPE_CHECKING:

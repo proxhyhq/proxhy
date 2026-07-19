@@ -1,7 +1,13 @@
 from typing import Literal
 
 from petty.protocol.datatypes import Item
+
 from plugins.settings import Setting, SettingGroup, SettingsStorage, create_setting
+
+_RED_PANE = Item.from_display_name("Red Stained Glass Pane")
+_YELLOW_PANE = Item.from_display_name("Yellow Stained Glass Pane")
+_LIME_PANE = Item.from_display_name("Lime Stained Glass Pane")
+assert _RED_PANE and _YELLOW_PANE and _LIME_PANE
 
 
 class BroadcastSettings(SettingGroup):
@@ -20,12 +26,12 @@ class BroadcastSettings(SettingGroup):
             description="The speed at which you fly at.",
             item="minecraft:feather",
             states={
-                "0.5x": (Item.from_display_name("Red Stained Glass Pane"), "red"),
+                "0.5x": (_RED_PANE, "red"),
                 "1x": (
-                    Item.from_display_name("Yellow Stained Glass Pane"),
+                    _YELLOW_PANE,
                     "yellow",
                 ),
-                "2x": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
+                "2x": (_LIME_PANE, "green"),
             },
             default_state="1x",
             storage=self._storage,
@@ -37,8 +43,8 @@ class BroadcastSettings(SettingGroup):
             description="Show title messages on screen.",
             item="minecraft:sign",
             states={
-                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
-                "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
+                "OFF": (_RED_PANE, "red"),
+                "ON": (_LIME_PANE, "green"),
             },
             default_state="ON",
             storage=self._storage,
@@ -52,8 +58,8 @@ class BroadcastSettings(SettingGroup):
             "from these commands!",
             item="minecraft:book",
             states={
-                "OFF": (Item.from_display_name("Red Stained Glass Pane"), "red"),
-                "ON": (Item.from_display_name("Lime Stained Glass Pane"), "green"),
+                "OFF": (_RED_PANE, "red"),
+                "ON": (_LIME_PANE, "green"),
             },
             default_state="ON",
             storage=self._storage,

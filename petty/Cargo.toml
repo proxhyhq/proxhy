@@ -1,0 +1,23 @@
+[package]
+name = "petty"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_petty"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "stub_gen"
+doc = false
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["abi3-py312", "experimental-inspect"] }
+pyo3-stub-gen = { version = "0.23", default-features = false, features = ["either", "infer_signature", "ordered-float"] }
+flate2 = "1.0"
+
+# NOTE: "extension-module" is intentionally NOT a default feature here.
+# maturin passes it explicitly (see petty/pyproject.toml [tool.maturin] features)
+# when building the cdylib for Python. Left as default, it would break plain
+# `cargo build`/`cargo run --bin stub_gen`, since extension-module builds assume
+# Python symbols are resolved dynamically at dlopen time rather than linked in.

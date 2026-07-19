@@ -4,7 +4,9 @@ repos:
     hooks:
       - id: ruff-check
         args: ["--fix"]
+        exclude: "^(petty/petty/_petty|gamestate/gamestate/_gamestate)/__init__\\.pyi$"
       - id: ruff-format
+        exclude: "^(petty/petty/_petty|gamestate/gamestate/_gamestate)/__init__\\.pyi$"
 
   - repo: local
     hooks:
@@ -13,4 +15,25 @@ repos:
         entry: uv run pyrefly check
         language: system
         types: [python]
+        pass_filenames: false
+
+      - id: rust-fmt
+        name: cargo fmt
+        entry: bash -c "cargo fmt --manifest-path gamestate/Cargo.toml && cargo fmt --manifest-path petty/Cargo.toml"
+        language: system
+        files: "^(gamestate|petty)/.*\\.(rs|toml)$"
+        pass_filenames: false
+
+      - id: rust-clippy
+        name: cargo clippy
+        entry: bash -c "cargo clippy --manifest-path gamestate/Cargo.toml --all-targets --all-features -- -D warnings && cargo clippy --manifest-path petty/Cargo.toml --all-targets --all-features -- -D warnings"
+        language: system
+        files: "^(gamestate|petty)/.*\\.(rs|toml)$"
+        pass_filenames: false
+
+      - id: rust-stub-gen
+        name: pyo3 type stubs
+        entry: bash -c "cargo run --quiet --manifest-path gamestate/Cargo.toml --bin stub_gen && cargo run --quiet --manifest-path petty/Cargo.toml --bin stub_gen"
+        language: system
+        files: "^(gamestate|petty)/.*\\.rs$"
         pass_filenames: false

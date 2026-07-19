@@ -13,7 +13,6 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 import numpy as np
-
 from gamestate.constants import MOB_TYPES
 from gamestate.enums import (
     CombatEventType,
@@ -77,6 +76,7 @@ from petty.protocol.datatypes import (
     UnsignedShort,
     VarInt,
 )
+
 from proxhy.utils import uuid_version
 
 type Packet = tuple[int, bytes]

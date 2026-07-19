@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
-from assets import load_json_asset
 from proxhy.argtypes.hypixel import GAMETYPE_T
+from proxhy.assets import load_json_asset
 
 
 @dataclass
@@ -22,7 +22,7 @@ _MAPS: dict[str, BedwarsMap] = {}
 
 
 def _load_bedwars_maps():
-    bw_maps_data: dict = load_json_asset("bedwars_maps.json")
+    bw_maps_data: dict[str, Any] = load_json_asset("bedwars_maps.json")
 
     for map_name, map_data in bw_maps_data.items():
         _MAPS[map_name] = BedwarsMap(

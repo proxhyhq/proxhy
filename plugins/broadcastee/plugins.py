@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from petty.events import listen_client, listen_server, subscribe
 from petty.net import ServerStream, State
 from petty.protocol.datatypes import Buffer, Short, String, VarInt
+
 from plugins.commands import CommandsPlugin, command
 
 if TYPE_CHECKING:

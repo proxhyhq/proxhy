@@ -65,12 +65,18 @@ class GameStatePlugin:
         self.upstream.send_packet = _hooked_sb_send_packet  # type: ignore
 
     def _handle_clientbound_packet(self: ProxhyPlugin, packet_id: int, buff: Buffer):
+        # before = time.perf_counter()
         self.gamestate.update_clientbound(packet_id, buff.getvalue())
         self.create_task(self.emit("cb_gamestate_update", (packet_id, buff.getvalue())))
+        # after = time.perf_counter()
+        # print(f"CB: {after - before}")
 
     def _handle_serverbound_packet(self: ProxhyPlugin, packet_id: int, buff: Buffer):
+        # before = time.perf_counter()
         self.gamestate.update_serverbound(packet_id, buff.getvalue())
         self.create_task(self.emit("sb_gamestate_update", (packet_id, buff.getvalue())))
+        # after = time.perf_counter()
+        # print(f"SB: {after - before}")
 
     @listen_client(0x02, blocking=True)
     async def _packet_use_entity(self: ProxhyPlugin, buff: Buffer):

@@ -3,9 +3,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from petty.protocol.datatypes import TextComponent
 from platformdirs import user_config_dir
 
-from petty.protocol.datatypes import TextComponent
 from plugins.commands import CommandGroup
 from plugins.commands._commands import CommandArg, CommandException
 

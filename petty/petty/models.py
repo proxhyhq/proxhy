@@ -1,10 +1,32 @@
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, overload
+from typing import Any, Literal
 
 import orjson
 
-from petty.assets import item_mapping
+from petty._petty import Item, SlotData  # noqa: F401
+
+type ItemID = int
+type ItemName = str
+type DisplayName = str
+type Color_T = Literal[
+    "black",
+    "dark_blue",
+    "dark_green",
+    "dark_aqua",
+    "dark_red",
+    "dark_purple",
+    "gold",
+    "gray",
+    "dark_gray",
+    "blue",
+    "green",
+    "aqua",
+    "red",
+    "light_purple",
+    "yellow",
+    "white",
+]
 
 
 @dataclass
@@ -14,63 +36,6 @@ class Pos:
     x: int = 0
     y: int = 0
     z: int = 0
-
-
-@dataclass
-class Item:
-    id: int
-    name: str
-    display_name: str
-    data: int
-
-    @classmethod
-    def from_name(cls, name: str):
-        if not name.startswith("minecraft:"):
-            name = f"minecraft:{name}"
-
-        item = next((item for item in item_mapping if item.get("name") == name), None)
-        return cls(**item) if item else None
-
-    @classmethod
-    def from_display_name(cls, display_name: str):
-        item = next(
-            (item for item in item_mapping if item.get("display_name") == display_name),
-            None,
-        )
-        return cls(**item) if item else None
-
-    @classmethod
-    def from_id(cls, id: int):
-        item = next((item for item in item_mapping if item.get("id") == id), None)
-        return cls(**item) if item else None
-
-
-class SlotData:
-    __slots__ = ("item", "count", "damage", "nbt")
-
-    @overload
-    def __init__(self, item: None = None) -> None: ...
-    @overload
-    def __init__(
-        self, item: Item, count: int = 1, damage: int = 0, nbt: bytes = b""
-    ) -> None: ...
-
-    def __init__(
-        self,
-        item: Item | None = None,
-        count: int = 1,
-        damage: int = 0,
-        nbt: bytes = b"",
-    ):
-        self.item = item
-        if item is None:
-            self.count = 0
-            self.damage = 0
-            self.nbt = b""
-        else:
-            self.count = count
-            self.damage = damage
-            self.nbt = nbt
 
 
 # Minecraft text component implementation
@@ -220,27 +185,7 @@ class TextComponent:
         return self
 
     # Formatting methods
-    def color(
-        self,
-        color: Literal[
-            "black",
-            "dark_blue",
-            "dark_green",
-            "dark_aqua",
-            "dark_red",
-            "dark_purple",
-            "gold",
-            "gray",
-            "dark_gray",
-            "blue",
-            "green",
-            "aqua",
-            "red",
-            "light_purple",
-            "yellow",
-            "white",
-        ],
-    ) -> TextComponent:
+    def color(self, color: Color_T) -> TextComponent:
         self.data["color"] = color
         return self
 

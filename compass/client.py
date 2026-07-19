@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 import httpx
 import pyroh
-
 from petty.endpoints import Server
 from petty.events import listen_server as listen
 from petty.net import State

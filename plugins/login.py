@@ -3,7 +3,6 @@ import base64
 import random
 import uuid
 from importlib.metadata import version
-from importlib.resources import files
 from json import JSONDecodeError
 from secrets import token_bytes
 from typing import TYPE_CHECKING, Literal
@@ -12,9 +11,6 @@ from unittest.mock import Mock
 import httpx
 import hypixel
 import orjson
-
-import mcauth as auth
-from mcauth.errors import AuthException, InvalidCredentials
 from petty.events import listen_client, listen_server, subscribe
 from petty.net import ServerStream, State
 from petty.protocol.crypt import (
@@ -38,7 +34,11 @@ from petty.protocol.datatypes import (
     UnsignedShort,
     VarInt,
 )
+
+import mcauth as auth
+from mcauth.errors import AuthException, InvalidCredentials
 from proxhy import utils
+from proxhy.assets import get_asset_path
 from proxhy.session import http_client
 from proxhy.utils import Cache
 
@@ -56,7 +56,7 @@ class LoginPlugin:
 
         # load favicon
         # https://github.com/barneygale/quarry/blob/master/quarry/net/server.py/#L356-L357
-        favicon_path = files("assets").joinpath("favicon.png")
+        favicon_path = get_asset_path("favicon.png")
         with favicon_path.open("rb") as file:
             b64_favicon = (
                 base64.encodebytes(file.read()).decode("ascii").replace("\n", "")

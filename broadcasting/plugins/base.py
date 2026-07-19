@@ -1,9 +1,10 @@
 import asyncio
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from gamestate.state import PlayerAbilityFlags
 from petty.events import subscribe
 from petty.protocol.datatypes import UUID, Byte, Double, Float, TextComponent, VarInt
+
 from plugins.commands import CommandException, command
 from proxhy.argtypes import ServerPlayer
 
@@ -14,15 +15,15 @@ if TYPE_CHECKING:
 class BroadcastPeerBasePlugin:
     # base functionality
 
-    flight: Literal[0, PlayerAbilityFlags.ALLOW_FLYING]
-    flying: Literal[0, PlayerAbilityFlags.FLYING]
+    flight: PlayerAbilityFlags
+    flying: PlayerAbilityFlags
 
     def _init_broadcast_peer(self: BroadcastPeerPlugin):
         self.spec_eid: int | None = None
-        self.flight: Literal[0, PlayerAbilityFlags.ALLOW_FLYING] = (
+        self.flight: PlayerAbilityFlags = (
             PlayerAbilityFlags.ALLOW_FLYING
-        )  # alternatively 0 if off
-        self.flying: Literal[0, PlayerAbilityFlags.FLYING] = PlayerAbilityFlags.FLYING
+        )  # alternatively PlayerAbilityFlags(0) if off
+        self.flying: PlayerAbilityFlags = PlayerAbilityFlags.FLYING
 
     @subscribe("close")
     async def _broadcast_peer_base_event_close(
@@ -134,14 +135,14 @@ class BroadcastPeerBasePlugin:
     async def _command_fly(self: BroadcastPeerPlugin):
         """Enable or disable flight."""
         if self.flight == PlayerAbilityFlags.ALLOW_FLYING:
-            self.flight = 0
-            self.flying = 0
+            self.flight = PlayerAbilityFlags(0)
+            self.flying = PlayerAbilityFlags(0)
         else:  # self.flight == 0
             self.flight = PlayerAbilityFlags.ALLOW_FLYING
 
         self.downstream.send_packet(
             0x39,
-            Byte.pack(PlayerAbilityFlags.INVULNERABLE | self.flying | self.flight)
+            Byte.pack(int(PlayerAbilityFlags.INVULNERABLE | self.flying | self.flight))
             + Float.pack(self.flight_speed)
             + Float.pack(self.proxy.gamestate.field_of_view_modifier),
         )
