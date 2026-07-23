@@ -9,6 +9,8 @@ from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+import numpy.typing as npt
 from hypixel import (
     ApiError,
     ClosedSession,
@@ -248,3 +250,53 @@ def short_node_id(node_id: str, prefix=8, suffix=8) -> str:
     if len(node_id) <= prefix + suffix:
         return node_id  # nothing to shorten
     return f"{node_id[:prefix]}…{node_id[-suffix:]}"
+
+
+MC_COLORS: dict[str, tuple[int, int, int]] = {
+    "§0": (0, 0, 0),
+    "§1": (0, 0, 170),
+    "§2": (0, 170, 0),
+    "§3": (0, 170, 170),
+    "§4": (170, 0, 0),
+    "§5": (170, 0, 170),
+    "§6": (255, 170, 0),
+    "§7": (170, 170, 170),
+    "§8": (85, 85, 85),
+    "§9": (85, 85, 255),
+    "§a": (85, 255, 85),
+    "§b": (85, 255, 255),
+    "§c": (255, 85, 85),
+    "§d": (255, 85, 255),
+    "§e": (255, 255, 85),
+    "§f": (255, 255, 255),
+}
+
+_CODES: npt.NDArray[np.str_] = np.array(list(MC_COLORS.keys()))
+_COLORS: npt.NDArray[np.uint8] = np.array(list(MC_COLORS.values()), dtype=np.uint8)
+
+
+def nearest_mc_color(decimal_color: int) -> str:
+    rgb: npt.NDArray[np.uint8] = np.array(
+        [
+            (decimal_color >> 16) & 0xFF,
+            (decimal_color >> 8) & 0xFF,
+            decimal_color & 0xFF,
+        ],
+        dtype=np.uint8,
+    )
+
+    diff: npt.NDArray[np.int32] = _COLORS.astype(np.int32) - rgb.astype(np.int32)
+
+    distances: npt.NDArray[np.int32] = np.sum(diff * diff, axis=1)
+    idx: np.intp = np.argmin(distances)
+
+    return _CODES[idx].item()
+
+    # row = _COLORS[idx]
+    # return (
+    #     _CODES[idx].item(),
+    #     (int(row[0]), int(row[1]), int(row[2])),
+    # )
+
+
+code, rgb = nearest_mc_color(12131356)

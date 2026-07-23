@@ -179,17 +179,6 @@ class StatcheckCommandPlugin:
             display_abridged=False,
         )
 
-    @subscribe("login_success")
-    async def _statcheck_event_login_success(self: ProxhyPlugin, _match, _data):
-        self.create_task(self._login_success_helper())
-
-    async def _login_success_helper(self: ProxhyPlugin):
-        self.hypixel_client = hypixel.Client(
-            self.hypixel_api_key, cache_h=False, cache_m=False
-        )
-        self.create_task(self.migrate_log_stats())
-        self.create_task(self.log_stats("login"))
-
     @subscribe("close")
     async def _statcheck_event_close(self: ProxhyPlugin, _match, _data):
         if getattr(self, "hypixel_client", None) is None:
