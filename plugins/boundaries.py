@@ -42,6 +42,8 @@ from plugins.statcheck import BW_MAPS, GamePlayer
 from proxhy.utils import uuid_version
 
 if TYPE_CHECKING:
+    import logging
+
     from proxhy.plugin import ProxhyPlugin
 
 
@@ -98,7 +100,7 @@ class BoundariesPlugin:
         # how often should we check for nearby generators (in seconds)
         self.GEN_CHECK_TIME = 1
 
-        self._next_boundary_entity_id: int = 0
+        self._next_boundary_entity_id: int = -999
 
         if self.log_generators:
             self.create_task(self.loop_gen_check())
@@ -225,7 +227,9 @@ class BoundariesPlugin:
                 "Already initialized some boundaries! May re-initialize existing ones by mistake."
             )
         for c in boundary_corners:
-            self.boundary_regions.append(BoundaryRegion(c[0], c[1], self.gamestate))
+            self.boundary_regions.append(
+                BoundaryRegion(c[0], c[1], self.gamestate, self.logger)
+            )
 
     def _collect_all_boundary_corners(self: ProxhyPlugin) -> list[tuple[Pos, Pos]]:
         """Collects boundary corners from bedwars_maps.json for bases and generators."""
@@ -922,7 +926,12 @@ class BoundariesPlugin:
 
         for s in region:
             rot, offset = self._get_segment_rotation_and_offsets(s)
-            position = (s.x + offset[0], s.y + offset[1], s.z + offset[2])
+            # add 0.5 to center on block
+            position = (
+                s.x + offset[0] + 0.5,
+                s.y + offset[1] + 0.5,
+                s.z + offset[2] + 0.5,
+            )
             is_corner = s.corner != SegmentCorner.NOT_CORNER
             await self.place_boundary_segment(position, is_corner, rot)
 
@@ -949,71 +958,140 @@ class BoundariesPlugin:
         SIDE = SegmentSide
         FACE = BlockFace
 
+        TOP_FACE_ERR = "Unknown behavior for top face."
+
         def get_pitch() -> int:
             if s.block_face == FACE.BOTTOM:
                 return 0
             elif s.block_face != FACE.TOP:
                 return 90
             else:
-                raise ValueError(f"Unknown behavior for face {s.block_face}!")
+                raise ValueError(TOP_FACE_ERR)
 
         def get_yaw() -> int:
-            if s.corner == CORNER.NOT_CORNER:
-                # edge cases
-                state = (s.direction, s.side)
-                match state:
-                    case DIR.Z, SIDE.NEGATIVE:
-                        return 0
-                    case DIR.X, SIDE.NEGATIVE:
-                        return 90
-                    case DIR.Z, SIDE.POSITIVE:
-                        return 180
-                    case DIR.X, SIDE.POSITIVE:
-                        return 270
-                    case _:
-                        raise ValueError
-            else:
-                # corner cases
-                match s.corner:
-                    case CORNER.NEG_POS:
-                        return 0
-                    case CORNER.NEG_NEG:
-                        return 90
-                    case CORNER.POS_NEG:
-                        return 180
-                    case CORNER.POS_POS:
-                        return 270
+            match s.block_face:
+                case FACE.BOTTOM:
+                    if s.corner == CORNER.NOT_CORNER:
+                        # edge cases
+                        state = (s.direction, s.side)
+                        match state:
+                            case DIR.Z, SIDE.NEGATIVE:
+                                return 0
+                            case DIR.X, SIDE.NEGATIVE:
+                                return 90
+                            case DIR.Z, SIDE.POSITIVE:
+                                return 180
+                            case DIR.X, SIDE.POSITIVE:
+                                return 270
+                            case _:
+                                raise ValueError
+                    else:
+                        # corner cases
+                        match s.corner:
+                            case CORNER.NEG_POS:
+                                return 0
+                            case CORNER.NEG_NEG:
+                                return 90
+                            case CORNER.POS_NEG:
+                                return 180
+                            case CORNER.POS_POS:
+                                return 270
+                case FACE.NEG_Z:
+                    return 0
+                case FACE.POS_X:
+                    return 90
+                case FACE.POS_Z:
+                    return 180
+                case FACE.NEG_X:
+                    return 270
+                case FACE.TOP:
+                    raise ValueError(TOP_FACE_ERR)
 
         def get_roll() -> int:
-            return 0
+            if s.corner != CORNER.NOT_CORNER:
+                return 0
+            state = (s.block_face, s.side)
+            match state:
+                case FACE.BOTTOM, _:
+                    return 0
+                case FACE.NEG_Z, SIDE.NEGATIVE:
+                    return 0
+                case FACE.NEG_Z, SIDE.POSITIVE:
+                    return 180
+                case FACE.POS_X, SIDE.NEGATIVE:
+                    return 0
+                case FACE.POS_X, SIDE.POSITIVE:
+                    return 180
+                case FACE.POS_Z, SIDE.NEGATIVE:
+                    return 180
+                case FACE.POS_Z, SIDE.POSITIVE:
+                    return 0
+                case FACE.NEG_X, SIDE.NEGATIVE:
+                    return 180
+                case FACE.NEG_X, SIDE.POSITIVE:
+                    return 0
+                case FACE.TOP, _:
+                    raise ValueError(TOP_FACE_ERR)
+                case _:
+                    raise ValueError(f"Unknown state {state}")
 
         pitch = get_pitch()
         yaw = get_yaw()
         roll = get_roll()
 
-        p_rad = math.radians(pitch)
-        y_rad = math.radians(yaw)
-        r_rad = math.radians(roll)
+        # OFFSET_LOOKUP = {
+        #     (0, 0, 0): (0, -1.75, 0),
+        #     (0, 90, 0): (0, -1.75, 0),
+        #     (0, 180, 0): (0, -1.75, 0),
+        #     (0, 270, 0): (0, -1.75, 0),
+        #     (90, 0, 0): (0, -1.43, -0.3),
+        #     (90, 90, 0): (0.3, -1.43, 0),
+        #     (90, 180, 0): (0, -1.43, 0.3),
+        #     (90, 270, 0): (-0.3, -1.43, 0),
+        #     (90, 0, 180): (0, -1.43, -0.3),
+        #     (90, 90, 180): (0.3, -1.43, 0),
+        #     (90, 180, 180): (0, -1.43, 0.3),
+        #     (90, 270, 180): (-0.3, -1.43, 0),
+        # }
 
-        sin, cos = math.sin, math.cos
+        OFFSET_LOOKUP = {
+            (0, 0, 0): (0, -1.75, 0),
+            (0, 90, 0): (0, -1.75, 0),
+            (0, 180, 0): (0, -1.75, 0),
+            (0, 270, 0): (0, -1.75, 0),
+            (90, 0, 0): (0, -1.43, 0.68),
+            (90, 90, 0): (-0.68, -1.43, 0),
+            (90, 180, 0): (0, -1.43, -0.68),
+            (90, 270, 0): (0.68, -1.43, 0),
+            (90, 0, 180): (0, -1.43, 0.68),
+            (90, 90, 180): (-0.68, -1.43, 0),
+            (90, 180, 180): (0, -1.43, -0.68),
+            (90, 270, 180): (0.68, -1.43, 0),
+        }
 
-        partial = sin(p_rad) * sin(y_rad)
-        x_offset = -0.25 * (partial * cos(r_rad) - cos(p_rad) * sin(r_rad))
-        y_offset = 0.25 * (1 - (partial * sin(r_rad) + cos(p_rad) * cos(r_rad)))
-        z_offset = -0.25 * sin(p_rad) * cos(y_rad)
+        offsets = OFFSET_LOOKUP.get((pitch, yaw, roll))
+        if offsets is None:
+            raise ValueError(f"Unknown rotation combination {pitch, yaw, roll}")
 
-        return ((pitch, yaw, roll), (x_offset, y_offset, z_offset))
+        return ((pitch, yaw, roll), offsets)
 
     # DEVELOPER DEBUG COMMAND; REMOVE LATER
     @command("place_boundary_here")
-    async def place_boundary_here(self: ProxhyPlugin, pitch, yaw, roll):
-        player_position = (
+    async def place_boundary_here(
+        self: ProxhyPlugin, pitch, yaw, roll, x_off, y_off, z_off
+    ):
+        ppos = (
             self.gamestate.position.x,
             self.gamestate.position.y,
             self.gamestate.position.z,
         )
+        bpos = (
+            math.floor(ppos[0]) + 0.5 + float(x_off),
+            math.floor(ppos[1]) + 0.5 + float(y_off),
+            math.floor(ppos[2]) + 0.5 + float(z_off),
+        )
         rot = (float(pitch), float(yaw), float(roll))
-        await self.place_boundary_segment(player_position, False, rot)
+        await self.place_boundary_segment(bpos, False, rot)
 
     async def place_boundary_segment(
         self: ProxhyPlugin,
@@ -1030,13 +1108,14 @@ class BoundariesPlugin:
         y_adjust = int(pos[1] * 32)
         z_adjust = int(pos[2] * 32)
 
+        # entity IDs are negative to avoid conflicts
         entity_id = self._allocate_boundary_entity_id()
 
         # spawn mob packet
         self.downstream.send_packet(
             0x0F,
             VarInt.pack(entity_id),
-            UnsignedByte.pack(78),  # Type: Armor Stand
+            UnsignedByte.pack(30),  # Type: Armor Stand
             Int.pack(x_adjust),
             Int.pack(y_adjust),
             Int.pack(z_adjust),
@@ -1265,7 +1344,9 @@ class BoundaryChain:
 
 
 class BoundaryRegion:
-    def __init__(self, c1: Pos, c2: Pos, gamestate: GameState):
+    def __init__(
+        self, c1: Pos, c2: Pos, gamestate: GameState, logger: logging.LoggerAdapter
+    ):
         """Positions should be global positions in world, not local boundary boxes."""
         # a boundary region has a node at each corner of cuboid; 8 total
         self.c1 = c1
@@ -1284,6 +1365,7 @@ class BoundaryRegion:
 
         # gamestate is necessary to query blocks at a location
         self.gamestate = gamestate
+        self.logger = logger
 
         # this shouldn't take too long, but just to be safe, don't interrupt the packet stream
         self.initialized_segments: bool = False
@@ -1683,7 +1765,7 @@ class BoundaryRegion:
                 blocktype = block.get("type")
 
                 if blocktype == BlockType.UNLOADED:
-                    break  # other y levels will also be unloaded
+                    continue
                 if blocktype == BlockType.AIR:
                     found_air = True
                     continue
@@ -1745,7 +1827,9 @@ class BoundaryRegion:
                 an unordered list of BoundaryChains.
         """
         if len(segments) == 0:
-            raise ValueError("segments is empty!")
+            self.logger.warning("Received empty segments list!")
+            return []
+            # raise ValueError("segments is empty!")
 
         paths: list[BoundaryChain] = []
         for s in segments:
