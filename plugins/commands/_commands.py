@@ -412,9 +412,15 @@ class Parameter:
                 if str(o).lower().startswith(partial.lower())
             ]
         elif self.is_union and self.union_types:
-            # Union type - collect suggestions from all CommandArg members
+            # collect suggestions from all commandarg and literal members of union
             for member_type in self.union_types:
-                if isinstance(member_type, type) and issubclass(
+                if get_origin(member_type) is Literal:
+                    suggestions.extend(
+                        str(o)
+                        for o in get_args(member_type)
+                        if str(o).lower().startswith(partial.lower())
+                    )
+                elif isinstance(member_type, type) and issubclass(
                     member_type, CommandArg
                 ):
                     member_suggestions = await member_type.suggest(ctx, partial)

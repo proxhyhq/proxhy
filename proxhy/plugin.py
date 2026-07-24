@@ -18,6 +18,7 @@ from plugins.sound import SoundPlugin
 from plugins.spatial import SpatialPlugin
 from plugins.statcheck import StatCheckPlugin
 from plugins.statcheck.command import StatcheckCommandPlugin
+from plugins.statcheck.providers import ProviderPlugin
 from plugins.window import WindowPlugin
 
 
@@ -33,6 +34,7 @@ class ProxhyPlugin(  # type: ignore
     HypixelStatePlugin,
     LoginPlugin,
     MiscPlugin,
+    ProviderPlugin,
     SettingsPlugin,
     SlashProxhy,
     SoundPlugin,

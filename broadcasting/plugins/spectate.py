@@ -399,7 +399,7 @@ class PlayerSpectateWindow(Window):
         self.health = self.proxy.proxy.get_health(self.entity.name)
 
         if self.player is not None:
-            if gplayer := self.proxy.proxy.players_with_stats.get(self.entity.name):
+            if gplayer := self.proxy.proxy.game_players.get(self.entity.name):
                 self.display_name = self.proxy.proxy._build_player_display_name(gplayer)
             else:
                 self.display_name = get_rankname(self.player)

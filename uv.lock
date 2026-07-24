@@ -181,6 +181,14 @@ requires-dist = [
 ]
 
 [[package]]
+name = "coral"
+version = "0.1.0"
+source = { git = "https://github.com/proxhyhq/coral#d09eaf5378cbb51ed7969c31dcfdb954c13bc007" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[[package]]
 name = "cryptography"
 version = "49.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -686,6 +694,7 @@ name = "proxhy"
 version = "2026.6.23.post1"
 source = { editable = "." }
 dependencies = [
+    { name = "coral" },
     { name = "cryptography" },
     { name = "httpx" },
     { name = "hypixel-py" },
@@ -711,6 +720,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "coral", git = "https://github.com/proxhyhq/coral" },
     { name = "cryptography", specifier = ">=48.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "hypixel-py", specifier = ">=0.4.2" },
