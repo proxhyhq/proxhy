@@ -16,10 +16,3 @@ features = ["pyo3/extension-module"]
 manifest-path = "Cargo.toml"
 module-name = "petty._petty"
 python-source = "python"
-
-[tool.uv]
-cache-keys = [
-  { file = "pyproject.toml" },
-  { file = "Cargo.toml" },
-  { file = "**/*.rs" },
-]

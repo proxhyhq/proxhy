@@ -160,6 +160,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# for rust libraries, should not be committed
+Cargo.lock
+
 # proxhy specific files
 stat_log.jsonl
 proxhy_settings.json
