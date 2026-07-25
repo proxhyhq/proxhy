@@ -31,7 +31,11 @@ jobs:
       - name: List build output
         run: ls -la dist/
 
+      # only published as a release asset on an actual version-tag push
+      # a workflow_dispatch test run still builds the wheel locally above
+      # (so uvbox has something to build binaries from) but doesn't publish it
       - name: Upload wheel
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: proxhy-wheel
