@@ -8,6 +8,7 @@ on:
       - "pyproject.toml"
       - "Cargo.toml"
       - ".pre-commit-config.yaml"
+  workflow_dispatch:
 
 jobs:
   pre-commit:

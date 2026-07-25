@@ -1,3 +1,5 @@
+name: Post GitHub release to Discord
+
 on:
   release:
     types: [published]

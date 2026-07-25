@@ -10,6 +10,7 @@ on:
     paths:
       - "petty/**"
       - ".github/workflows/build-wheels.yml"
+  workflow_dispatch:
 
 jobs:
   build-wheels:
