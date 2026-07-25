@@ -4,24 +4,20 @@ on:
   pull_request:
     paths:
       - "**/*.py"
+      - "**/*.rs"
       - "pyproject.toml"
+      - "Cargo.toml"
+      - ".pre-commit-config.yaml"
 
 jobs:
-  lint:
-    name: Lint & Format
+  pre-commit:
+    name: pre-commit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - run: uv sync --group dev
-      - run: uv run ruff check .
-      - run: uv run ruff format --check --diff .
-
-  typecheck:
-    name: Typecheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --group dev
-      - run: uv run pyrefly check
+      - uses: pre-commit/action@v3.0.1
