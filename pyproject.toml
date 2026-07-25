@@ -6,7 +6,7 @@ requires-python = ">=3.14"
 license = "MIT"
 authors = [{ name = "Kavi Bidlack" }, { name = "Manu Jhawar" }]
 dependencies = [
-  "coral>=0.1.0",
+  "coral @ git+https://github.com/proxhyhq/coral@d09eaf5378cbb51ed7969c31dcfdb954c13bc007",
   "cryptography>=48.0.0",
   "httpx>=0.28.1",
   "hypixel-py>=0.4.2",
@@ -20,7 +20,7 @@ dependencies = [
   "platformdirs>=4.3",
   "pyjwt>=2.10",
   "pyroh>=0.4.2",
-  "seraph>=0.1.0",
+  "seraph @ git+https://github.com/proxhyhq/seraph@48dd82c9c6fe2edea57bdfc848cf959cb2d2c4fb",
   "uvloop>=0.22.1; platform_system != 'Windows'",
   "winloop>=0.6.0; platform_system == 'Windows'",
 ]
@@ -65,7 +65,5 @@ members = ["mcauth", "petty", "compass"]
 
 [tool.uv.sources]
 compass = { workspace = true }
-coral = { git = "https://github.com/proxhyhq/coral" }
-seraph = { git = "https://github.com/proxhyhq/seraph" }
 petty = { workspace = true }
 mcauth = { workspace = true }
