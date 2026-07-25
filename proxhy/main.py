@@ -9,10 +9,10 @@ from asyncio import StreamReader, StreamWriter
 from datetime import datetime
 from importlib.metadata import version
 
+from petty.endpoints import Proxy
 from platformdirs import user_log_path
 
 import mcauth as auth
-from petty.endpoints import Proxy
 from proxhy import session
 from proxhy.proxhy import Proxhy
 from proxhy.utils import zero_pad_calver

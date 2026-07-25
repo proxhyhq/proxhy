@@ -14,6 +14,7 @@ from typing import (
 )
 
 from petty.protocol.datatypes import TextComponent
+
 from proxhy.errors import ProxhyException
 
 

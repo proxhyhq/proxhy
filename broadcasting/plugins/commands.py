@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 from petty.events import subscribe
 from petty.protocol.datatypes import Buffer, String, TextComponent, VarInt
+
 from plugins.commands import Command, CommandException, CommandGroup, CommandsPlugin
 
 if TYPE_CHECKING:

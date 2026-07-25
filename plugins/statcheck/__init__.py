@@ -8,9 +8,6 @@ from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeIs, get_args
 
-from platformdirs import user_cache_dir
-
-from assets import load_json_asset
 from petty.events import listen_server, subscribe
 from petty.protocol.datatypes import (
     UUID,
@@ -22,6 +19,9 @@ from petty.protocol.datatypes import (
     TextComponent,
     VarInt,
 )
+from platformdirs import user_cache_dir
+
+from assets import load_json_asset
 from plugins.commands import CommandException, command
 from plugins.statcheck.models import (
     COLOR_CODE_TO_NAME,

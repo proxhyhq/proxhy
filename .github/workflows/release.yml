@@ -6,28 +6,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-pyapp:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: proxhy-linux
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: proxhy-macos
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: proxhy-windows
-
-    runs-on: ${{ matrix.os }}
-
+  # uvbox can cross compile
+  build:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
 
       - name: Install Python 3.14
         run: uv python install 3.14
@@ -35,67 +21,42 @@ jobs:
       - name: Build proxhy wheel
         run: uv build --wheel
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Download pyapp source
-        shell: bash
-        run: |
-          curl -fsSL https://github.com/ofek/pyapp/releases/latest/download/source.tar.gz \
-            | tar -xz
-          mv pyapp-* pyapp-src
-
-      - name: Copy wheel into pyapp source
-        shell: bash
-        run: cp dist/proxhy-*.whl pyapp-src/
-
-      - name: Get wheel filename
+      - name: Get wheel path
         id: wheel
-        shell: bash
-        run: echo "path=$(ls dist/proxhy-*.whl | head -1 | xargs basename)" >> $GITHUB_OUTPUT
+        run: echo "path=$(ls dist/proxhy-*.whl | head -1)" >> $GITHUB_OUTPUT
 
-      - name: Build pyapp
-        shell: bash
-        working-directory: pyapp-src
-        env:
-          PYAPP_PROJECT_PATH: ${{ steps.wheel.outputs.path }}
-          PYAPP_EXEC_SPEC: proxhy.main:main
-          PYAPP_PYTHON_VERSION: "3.14"
-          PYAPP_PIP_EXTRA_ARGS: "--index-url https://proxhyhq.github.io/proxhy/simple/ --extra-index-url https://pypi.org/simple/"
-          PYAPP_EXPOSE_ALL_COMMANDS: 1
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build binaries with uvbox
+        run: uvx uvbox wheel --config uvbox.toml ${{ steps.wheel.outputs.path }}
 
-      - name: Stage artifact (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          cp pyapp-src/target/${{ matrix.target }}/release/pyapp ${{ matrix.artifact }}
-          chmod +x ${{ matrix.artifact }}
+      - name: List build output
+        run: ls -la dist/
 
-      - name: Stage artifact (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: cp pyapp-src/target/${{ matrix.target }}/release/pyapp.exe ${{ matrix.artifact }}.exe
-
-      - name: Upload artifact
+      - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}${{ runner.os == 'Windows' && '.exe' || '' }}
+          name: proxhy-wheel
+          path: dist/*.whl
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxhy-binaries
+          path: |
+            dist/proxhy-*.tar.gz
+            dist/proxhy-*.zip
 
   # ── Publish wheel to GitHub Pages index ─────────────────────────
   publish-index:
-    needs: build-pyapp
+    needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
       pages: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v5
       - name: Build wheel
         run: uv build --wheel
       - name: Generate simple index
@@ -117,9 +78,9 @@ jobs:
 
   # ── Create GitHub Release ────────────────────────────────────────
   release:
-    needs: build-pyapp
+    needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
@@ -138,6 +99,5 @@ jobs:
           name: ${{ steps.version.outputs.name }}
           generate_release_notes: true
           files: |
-            proxhy-macos
-            proxhy-linux
-            proxhy-windows.exe
+            proxhy-*
+            *.whl

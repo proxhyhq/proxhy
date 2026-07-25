@@ -4,6 +4,7 @@ from importlib.metadata import version
 from typing import TYPE_CHECKING
 
 from petty.protocol.datatypes import TextComponent
+
 from plugins.commands import CommandGroup
 from proxhy.utils import zero_pad_calver
 

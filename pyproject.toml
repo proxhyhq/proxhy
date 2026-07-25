@@ -11,10 +11,12 @@ dependencies = [
   "httpx>=0.28.1",
   "hypixel-py>=0.4.2",
   "keyring>=25.6",
+  "mcauth",
   "numba>=0.63.1",
   "numpy>=2.3.3",
   "orjson>=3.11.7",
   "packaging>=26.2",
+  "petty",
   "platformdirs>=4.3",
   "pyjwt>=2.10",
   "pyroh>=0.4.2",
@@ -42,7 +44,7 @@ invalid-annotation = false
 [tool.ruff]
 line-length = 88
 target-version = "py314"
-exclude = ["assets/*"]
+exclude = ["assets/*", "petty/python/petty/_petty/*"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "C4"]
@@ -62,8 +64,8 @@ where = ["."]
 members = ["mcauth", "petty", "compass"]
 
 [tool.uv.sources]
-mcauth = { workspace = true }
-petty = { workspace = true }
 compass = { workspace = true }
 coral = { git = "https://github.com/proxhyhq/coral" }
 seraph = { git = "https://github.com/proxhyhq/seraph" }
+petty = { workspace = true }
+mcauth = { workspace = true }

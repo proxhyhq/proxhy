@@ -1,9 +1,10 @@
 import asyncio
 from typing import TYPE_CHECKING
 
+from petty.protocol.datatypes import TextComponent
+
 import mcauth as auth
 from compass import CompassClient, RequestFailure
-from petty.protocol.datatypes import TextComponent
 from plugins.commands import CommandException, CommandGroup
 
 if TYPE_CHECKING:
