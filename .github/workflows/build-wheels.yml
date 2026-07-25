@@ -1,15 +1,6 @@
 name: Build petty wheels
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "petty/**"
-      - ".github/workflows/build-wheels.yml"
-  pull_request:
-    paths:
-      - "petty/**"
-      - ".github/workflows/build-wheels.yml"
   workflow_dispatch:
 
 jobs:
