@@ -8,6 +8,7 @@ on:
       - "pyproject.toml"
       - "Cargo.toml"
       - ".pre-commit-config.yaml"
+      - ".github/workflows/lint.yml"
   push:
     branches: [main]
     paths:
@@ -16,6 +17,7 @@ on:
       - "pyproject.toml"
       - "Cargo.toml"
       - ".pre-commit-config.yaml"
+      - ".github/workflows/lint.yml"
   workflow_dispatch:
 
 jobs:
