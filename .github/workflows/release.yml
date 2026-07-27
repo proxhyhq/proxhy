@@ -42,7 +42,7 @@ jobs:
         run: |
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a ../proxhy-${{ matrix.target }}.zip proxhy
+            7z a ../proxhy-${{ matrix.target }}.zip proxhy.exe
           else
             tar -czf ../proxhy-${{ matrix.target }}.tar.gz proxhy
           fi
