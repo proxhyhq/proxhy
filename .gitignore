@@ -166,3 +166,6 @@ Cargo.lock
 # proxhy specific files
 stat_log.jsonl
 proxhy_settings.json
+
+# perhaps only for now
+*.spec

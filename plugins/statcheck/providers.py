@@ -10,8 +10,8 @@ import coral
 import hypixel
 import keyring
 import seraph
-
 from petty.events import subscribe
+
 from plugins.statcheck.models import (
     BedWarsTeam,
     GamePlayerStatus,

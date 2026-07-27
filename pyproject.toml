@@ -29,7 +29,12 @@ dependencies = [
 proxhy = "proxhy.main:main"
 
 [dependency-groups]
-dev = ["pre-commit", "pyrefly", "ruff"]
+dev = [
+  "pre-commit",
+  "pyinstaller>=6.21.0",
+  "pyrefly",
+  "ruff",
+]
 
 [build-system]
 requires = ["setuptools"]

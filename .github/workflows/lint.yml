@@ -29,4 +29,5 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: uv sync --group dev
-      - uses: pre-commit/action@v3.0.1
+        # https://github.com/pre-commit/action/blob/main/action.yml doesn't work because it uses the wrong python lol
+      - run: uv run pre-commit run --all-files --show-diff-on-failure --color=always --hook-stage pre-push

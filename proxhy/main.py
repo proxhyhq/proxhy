@@ -1,3 +1,12 @@
+import os
+from pathlib import Path
+
+from platformdirs import user_cache_dir
+
+# must go before any numba imports
+# so this should work
+os.environ["NUMBA_CACHE_DIR"] = str(Path(user_cache_dir("proxhy")) / "numba")
+
 import argparse
 import asyncio
 import errno

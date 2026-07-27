@@ -31,7 +31,7 @@ repos:
 
       - id: check-stubs-fresh
         name: check _petty stubs are up to date
-        entry: bash -c 'cargo run --manifest-path petty/Cargo.toml --bin stub_gen --no-default-features --quiet && git diff --exit-code petty/python/petty/_petty/__init__.pyi'
+        entry: bash -c 'export PYTHONHOME="$(python3 -c "import sys; print(sys.base_prefix)")"; cargo run --manifest-path petty/Cargo.toml --bin stub_gen --no-default-features --quiet && git diff --exit-code petty/python/petty/_petty/__init__.pyi'
         language: system
         types: [rust]
         stages: [pre-push]
