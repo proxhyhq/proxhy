@@ -26,10 +26,10 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Sync dependencies
-        run: uv sync --no-editable
+        run: "uv sync --no-editable --only-binary :all:"
 
       - name: Build with PyInstaller
-        run: uv run pyinstaller --collect-submodules proxhy --collect-all numba --add-data assets:assets --name proxhy launcher.py
+        run: uv run pyinstaller --onefile --bootloader-ignore-signals --collect-submodules proxhy --collect-all numba --add-data assets:assets --name proxhy launcher.py
 
       - name: Archive build output
         shell: bash
