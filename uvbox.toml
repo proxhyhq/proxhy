@@ -1,9 +1,0 @@
-[package]
-name = "proxhy"
-script = "proxhy"
-
-[uv]
-environment = [
-  "UV_INDEX_URL=https://index.proxhy.com/",
-  "UV_EXTRA_INDEX_URL=https://pypi.org/simple/",
-]

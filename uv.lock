@@ -750,6 +750,7 @@ name = "proxhy"
 version = "2026.6.23.post1"
 source = { editable = "." }
 dependencies = [
+    { name = "compass" },
     { name = "coral" },
     { name = "cryptography" },
     { name = "httpx" },
@@ -779,6 +780,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "compass", editable = "compass" },
     { name = "coral", git = "https://github.com/proxhyhq/coral?rev=d09eaf5378cbb51ed7969c31dcfdb954c13bc007" },
     { name = "cryptography", specifier = ">=48.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },

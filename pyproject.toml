@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 license = "MIT"
 authors = [{ name = "Kavi Bidlack" }, { name = "Manu Jhawar" }]
 dependencies = [
+  "compass",
   "coral @ git+https://github.com/proxhyhq/coral@d09eaf5378cbb51ed7969c31dcfdb954c13bc007",
   "cryptography>=48.0.0",
   "httpx>=0.28.1",
