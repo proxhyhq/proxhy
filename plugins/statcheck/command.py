@@ -14,7 +14,6 @@ from petty.protocol.datatypes import TextComponent
 from plugins.commands import CommandContext, CommandException, Lazy, command
 from proxhy.argtypes import Gamemode, HypixelPlayer, Statistic
 from proxhy.argtypes.hypixel import GAMETYPE_T, Stat
-from proxhy.utils import APIClient
 from proxhypixel.formatting import (
     format_bedwars_dict,
     format_bw_star,
@@ -240,56 +239,6 @@ class StatcheckCommandPlugin:
     @staticmethod
     def _is_uuid(value: str) -> bool:
         return bool(re.fullmatch(r"[0-9a-f]{32}", value, re.IGNORECASE))
-
-    async def migrate_log_stats(self: ProxhyPlugin) -> None:
-        """Migrate stat log entries that use player names to use UUIDs instead."""
-        if not os.path.exists(self.log_path):
-            return
-
-        with open(self.log_path) as f:
-            lines = f.readlines()
-
-        # Collect unique names that need migration
-        names_to_resolve: set[str] = set()
-        for line in lines:
-            try:
-                entry = orjson.loads(line.strip())
-                player = entry.get("player", "")
-                if player and not self._is_uuid(player):
-                    names_to_resolve.add(player)
-            except Exception:
-                continue
-
-        if not names_to_resolve:
-            return
-
-        # Resolve names to UUIDs via Mojang API
-        name_to_uuid: dict[str, str] = {}
-        async with APIClient() as client:
-            for name in names_to_resolve:
-                try:
-                    info = await client.get_profile(name)
-                    name_to_uuid[name] = info.uuid
-                except Exception as e:
-                    print(f"Failed to resolve UUID for '{name}': {e}")
-
-        if not name_to_uuid:
-            return
-
-        # Rewrite the log file with UUIDs
-        new_lines = []
-        for line in lines:
-            try:
-                entry = orjson.loads(line.strip())
-                player = entry.get("player", "")
-                if player in name_to_uuid:
-                    entry["player"] = name_to_uuid[player]
-                new_lines.append(orjson.dumps(entry).decode() + "\n")
-            except Exception:
-                new_lines.append(line)
-
-        with open(self.log_path, "w") as f:
-            f.writelines(new_lines)
 
     def _find_closest_stat_log(
         self, uuid: str, window: float, gamemode: GAMETYPE_T

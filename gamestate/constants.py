@@ -36,3 +36,5 @@ MOB_TYPES = {
     101,
     120,
 }
+
+ARMOR_STAND_OBJECT_TYPE = 78

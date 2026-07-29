@@ -27,8 +27,6 @@ from petty.protocol.datatypes import (
     Double,
     Float,
     Int,
-    Short,
-    Slot,
     String,
     TextComponent,
     UnsignedByte,
@@ -39,11 +37,20 @@ from petty.protocol.datatypes import (
 import mcauth as auth
 from mcauth.errors import AuthException, InvalidCredentials
 from proxhy import utils
+from proxhy.entity_resend import resend_armor_stands
 from proxhy.session import http_client
 from proxhy.utils import Cache
 
 if TYPE_CHECKING:
     from proxhy.plugin import ProxhyPlugin
+
+
+# https://github.com/barneygale/quarry/blob/master/quarry/net/server.py/#L356-L357
+_favicon_path = files("assets").joinpath("favicon.png")
+with _favicon_path.open("rb") as _favicon_file:
+    _B64_FAVICON = (
+        base64.encodebytes(_favicon_file.read()).decode("ascii").replace("\n", "")
+    )
 
 
 class LoginPlugin:
@@ -54,14 +61,6 @@ class LoginPlugin:
         self.device_code_task = None
         self.transferring_to_server = False
 
-        # load favicon
-        # https://github.com/barneygale/quarry/blob/master/quarry/net/server.py/#L356-L357
-        favicon_path = files("assets").joinpath("favicon.png")
-        with favicon_path.open("rb") as file:
-            b64_favicon = (
-                base64.encodebytes(file.read()).decode("ascii").replace("\n", "")
-            )
-
         self.server_list_ping = {
             "version": {"name": "1.8.9", "protocol": 47},
             "players": {
@@ -69,7 +68,7 @@ class LoginPlugin:
                 "online": 0,
             },
             "description": {"text": "why hello there"},
-            "favicon": f"data:image/png;base64,{b64_favicon}",
+            "favicon": f"data:image/png;base64,{_B64_FAVICON}",
         }
 
         self.access_token = ""
@@ -135,39 +134,6 @@ class LoginPlugin:
 
         else:
             self.downstream.send_packet(0x01, buff.getvalue())
-
-    async def _resend_armor_stands(self: ProxhyPlugin):
-        await asyncio.sleep(1.0)
-        while self.open and self.downstream.open:
-            for entity in list(self.gamestate.entities.values()):
-                if entity.entity_type != 78:
-                    continue
-
-                eid = entity.entity_id
-                # destroy first
-                self.downstream.send_packet(0x13, VarInt.pack(1) + VarInt.pack(eid))
-                packet_id, packet_data = self.gamestate._build_spawn_object(entity)
-                self.downstream.send_packet(packet_id, packet_data)
-                if entity.metadata:
-                    self.downstream.send_packet(
-                        0x1C,
-                        VarInt.pack(eid)
-                        + self.gamestate._pack_metadata(entity.metadata),
-                    )
-                equip = entity.equipment
-                for slot_id, item in [
-                    (0, equip.held),
-                    (1, equip.boots),
-                    (2, equip.leggings),
-                    (3, equip.chestplate),
-                    (4, equip.helmet),
-                ]:
-                    if item.item:
-                        self.downstream.send_packet(
-                            0x04,
-                            VarInt.pack(eid) + Short.pack(slot_id) + Slot.pack(item),
-                        )
-            await asyncio.sleep(5.0)
 
     @listen_client(0x00, State.LOGIN, blocking=True)
     async def packet_login_start(self: ProxhyPlugin, buff: Buffer):
@@ -585,7 +551,7 @@ class LoginPlugin:
 
     @subscribe("login_success")
     async def _login_start_armor_stand_task(self: ProxhyPlugin, _match, _data):
-        self.create_task(self._resend_armor_stands())
+        self.create_task(resend_armor_stands(self, self.gamestate))
 
     @subscribe("login_success")
     async def _broadcast_event_login_success(self: ProxhyPlugin, _match, _data):

@@ -17,8 +17,6 @@ from petty.protocol.datatypes import (
     Double,
     Float,
     Int,
-    Short,
-    Slot,
     String,
     TextComponent,
     UnsignedByte,
@@ -27,6 +25,7 @@ from petty.protocol.datatypes import (
 )
 
 from gamestate.state import PlayerAbilityFlags
+from proxhy.entity_resend import resend_armor_stands
 from proxhy.utils import APIClient, offline_uuid, uuid_version
 
 if TYPE_CHECKING:
@@ -295,39 +294,4 @@ class BroadcastPeerLoginPlugin:
     async def _broadcast_peer_start_armor_stand_task(
         self: BroadcastPeerPlugin, _match, _data
     ):
-        self.create_task(self._resend_armor_stands_peer())
-
-    async def _resend_armor_stands_peer(self: BroadcastPeerPlugin):
-        await asyncio.sleep(1.0)
-        while self.open and self.downstream.open:
-            for entity in list(self.proxy.gamestate.entities.values()):
-                if entity.entity_type != 78:
-                    continue
-
-                eid = entity.entity_id
-                # destroy first
-                self.downstream.send_packet(0x13, VarInt.pack(1) + VarInt.pack(eid))
-                packet_id, packet_data = self.proxy.gamestate._build_spawn_object(
-                    entity
-                )
-                self.downstream.send_packet(packet_id, packet_data)
-                if entity.metadata:
-                    self.downstream.send_packet(
-                        0x1C,
-                        VarInt.pack(eid)
-                        + self.proxy.gamestate._pack_metadata(entity.metadata),
-                    )
-                equip = entity.equipment
-                for slot_id, item in [
-                    (0, equip.held),
-                    (1, equip.boots),
-                    (2, equip.leggings),
-                    (3, equip.chestplate),
-                    (4, equip.helmet),
-                ]:
-                    if item.item:
-                        self.downstream.send_packet(
-                            0x04,
-                            VarInt.pack(eid) + Short.pack(slot_id) + Slot.pack(item),
-                        )
-            await asyncio.sleep(5.0)
+        self.create_task(resend_armor_stands(self, self.proxy.gamestate))

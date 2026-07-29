@@ -490,8 +490,13 @@ def _field_provider(key: str) -> type[Provider]:
         ) from None
 
 
+_migrated_legacy_api_key = False
+
+
 class ProviderPlugin:
     def _init_providers(self: ProxhyPlugin):
+        global _migrated_legacy_api_key  # ):
+
         self.active_providers: dict[_LowerRegisteredProvider_T, Provider] = {}
         self.provided_fields: list[str] = []
 
@@ -504,11 +509,12 @@ class ProviderPlugin:
         ]
 
         # TODO: remove sometime in future
-        # one-time migration from the old per-entry keyring storage
-        old = keyring.get_password("proxhy", "hypixel_api_key")
-        if old:
-            set_secret("hypixel_api_key", old)
-            keyring.delete_password("proxhy", "hypixel_api_key")
+        if not _migrated_legacy_api_key:
+            _migrated_legacy_api_key = True
+            old = keyring.get_password("proxhy", "hypixel_api_key")
+            if old:
+                set_secret("hypixel_api_key", old)
+                keyring.delete_password("proxhy", "hypixel_api_key")
 
     @subscribe("login_success")
     async def _statcheck_event_login_success(self: ProxhyPlugin, _match, _data):
@@ -524,7 +530,6 @@ class ProviderPlugin:
         )
         self.hypixel_provider: HypixelProvider = hprovider
 
-        self.create_task(self.migrate_log_stats())
         self.create_task(self.log_stats("login"))
 
     async def populate_player(

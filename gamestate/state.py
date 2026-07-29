@@ -35,7 +35,7 @@ from petty.protocol.datatypes import (
     VarInt,
 )
 
-from gamestate.constants import MOB_TYPES
+from gamestate.constants import ARMOR_STAND_OBJECT_TYPE, MOB_TYPES
 from gamestate.enums import (
     CombatEventType,
     Difficulty,
@@ -2354,6 +2354,52 @@ class GameState:
                 + Short.pack(int(entity.velocity.z * 8000))
             )
         return (0x0E, data)
+
+    def build_armor_stand_resend_packets(self) -> list[Packet]:
+        """Build packets to destroy and respawn all armor stands.
+
+        Hypixel periodically forgets to keep armor stands alive client-side,
+        so callers resend this on an interval to keep them visible.
+        """
+        stands = [
+            entity
+            for entity in self.entities.values()
+            if entity.entity_type == ARMOR_STAND_OBJECT_TYPE
+        ]
+        if not stands:
+            return []
+
+        packets: list[Packet] = [
+            (
+                0x13,
+                VarInt.pack(len(stands))
+                + b"".join(VarInt.pack(entity.entity_id) for entity in stands),
+            )
+        ]
+        for entity in stands:
+            eid = entity.entity_id
+            packets.append(self._build_spawn_object(entity))
+            if entity.metadata:
+                packets.append(
+                    (0x1C, VarInt.pack(eid) + self._pack_metadata(entity.metadata))
+                )
+            equip = entity.equipment
+            slots = [
+                (EquipmentSlot.HELD, equip.held),
+                (EquipmentSlot.BOOTS, equip.boots),
+                (EquipmentSlot.LEGGINGS, equip.leggings),
+                (EquipmentSlot.CHESTPLATE, equip.chestplate),
+                (EquipmentSlot.HELMET, equip.helmet),
+            ]
+            for slot_id, item in slots:
+                if item.item:
+                    packets.append(
+                        (
+                            0x04,
+                            VarInt.pack(eid) + Short.pack(slot_id) + Slot.pack(item),
+                        )
+                    )
+        return packets
 
     def _build_entity_metadata(self) -> list[Packet]:
         """Build Entity Metadata packets (0x1C) for all entities."""

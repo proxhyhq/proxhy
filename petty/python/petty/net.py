@@ -1,6 +1,7 @@
 import asyncio
 import zlib
 from asyncio import StreamReader, StreamWriter
+from collections.abc import Iterable
 from enum import Enum
 
 from cryptography.hazmat.backends import default_backend
@@ -120,7 +121,7 @@ class Stream:
         except asyncio.CancelledError:
             pass
 
-    def send_packet(self, id: int, *data: bytes) -> None:
+    def _frame_packet(self, id: int, *data: bytes) -> bytes:
         packet = VarInt.pack(id) + b"".join(data)
 
         if self.compression:
@@ -131,7 +132,13 @@ class Stream:
             else:
                 packet = VarInt.pack(0) + packet
 
-        self.write(VarInt.pack(len(packet)) + packet)
+        return VarInt.pack(len(packet)) + packet
+
+    def send_packet(self, id: int, *data: bytes) -> None:
+        self.write(self._frame_packet(id, *data))
+
+    def send_packets(self, packets: Iterable[tuple[int, bytes]]) -> None:
+        self.write(b"".join(self._frame_packet(id, data) for id, data in packets))
 
 
 class ClientStream(Stream):

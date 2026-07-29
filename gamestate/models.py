@@ -104,6 +104,15 @@ class Vec3i:
         return Vec3i(self.x, self.y, self.z)
 
 
+def warm_up_jit() -> None:
+    # force compile vec3d/vec3i now instead of later
+    a, b = Vec3d(1.0, 2.0, 3.0), Vec3d(4.0, 5.0, 6.0)
+    a + b, a - b, a * 2.0, a / 2.0, a // 2.0, a == b, a != b, a.copy()
+
+    x, y = Vec3i(1, 2, 3), Vec3i(4, 5, 6)
+    x + y, x - y, x * 2, x // 2, x == y, x != y, x.copy()
+
+
 @dataclass
 class Rotation:
     """Entity rotation."""

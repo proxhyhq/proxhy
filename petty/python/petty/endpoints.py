@@ -36,7 +36,9 @@ class PacketNode(ABC):
         StreamDirection,
         dict[tuple[int, State], PacketListenerList[Buffer]],
     ] = {"downstream": defaultdict(list), "upstream": defaultdict(list)}
-    _event_listeners: dict[str, list[EventListenerFunction]] = defaultdict(list)
+    _event_listeners: dict[re.Pattern[str], list[EventListenerFunction]] = defaultdict(
+        list
+    )
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -62,7 +64,7 @@ class PacketNode(ABC):
                     (func, meta)
                 )
             else:
-                cls._event_listeners[meta].append(func)
+                cls._event_listeners[re.compile(meta)].append(func)
 
     def _setup_node(self):
         self.state = State.HANDSHAKING
@@ -149,9 +151,9 @@ class PacketNode(ABC):
 
     async def emit(self, event: str, data: Any = None):
         results = []
-        for e in self._event_listeners:
-            if (match := re.fullmatch(e, event)) is not None:
-                for handler in self._event_listeners[e]:
+        for pattern, handlers in self._event_listeners.items():
+            if (match := pattern.fullmatch(event)) is not None:
+                for handler in handlers:
                     results.append(await handler(self, match, deepcopy(data)))
         return results
 

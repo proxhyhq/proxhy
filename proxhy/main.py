@@ -22,7 +22,9 @@ from petty.endpoints import Proxy
 from platformdirs import user_log_path
 
 import mcauth as auth
+from gamestate.models import warm_up_jit
 from proxhy import session
+from proxhy.loop_watchdog import LoopWatchdog
 from proxhy.proxhy import Proxhy
 from proxhy.utils import zero_pad_calver
 
@@ -303,9 +305,9 @@ async def shutdown(loop: asyncio.AbstractEventLoop, server: ProxhyServer, _):
     loop.stop()
 
 
-# Main entry point
 async def _main():
-    # Start server first so the signal handler can reference it safely
+    warm_up_jit()
+
     server = await start(
         host="localhost",
         port=args.port,
@@ -314,8 +316,9 @@ async def _main():
 
     loop = asyncio.get_running_loop()
 
-    # Cross-platform SIGINT handling: use loop.add_signal_handler where supported;
-    # on Windows, fall back to signal.signal + loop.call_soon_threadsafe.
+    if args.dev:
+        LoopWatchdog(logger).start()
+
     def _on_sigint():
         asyncio.create_task(shutdown(loop, server, signal.SIGINT))
 
@@ -323,7 +326,6 @@ async def _main():
         try:
             loop.add_signal_handler(signal.SIGINT, _on_sigint)
         except NotImplementedError, AttributeError:
-            # Windows / event loops without add_signal_handler
             signal.signal(
                 signal.SIGINT,
                 lambda s, f: loop.call_soon_threadsafe(_on_sigint),
