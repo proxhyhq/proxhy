@@ -162,10 +162,3 @@ cython_debug/
 
 # for rust libraries, should not be committed
 Cargo.lock
-
-# proxhy specific files
-stat_log.jsonl
-proxhy_settings.json
-
-# perhaps only for now
-*.spec

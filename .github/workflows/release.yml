@@ -35,7 +35,7 @@ jobs:
         run: uv sync --no-editable
 
       - name: Build with PyInstaller
-        run: uv run pyinstaller --onefile --bootloader-ignore-signals --collect-submodules proxhy --collect-all numba --add-data assets:assets --name proxhy launcher.py
+        run: uv run pyinstaller proxhy.spec
 
       - name: Archive build output
         shell: bash

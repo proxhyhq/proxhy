@@ -1,4 +1,4 @@
-# uv run pyinstaller --onefile --bootloader-ignore-signals --collect-submodules proxhy --collect-all numba --add-data assets:assets --name proxhy launcher.py
+# uv run pyinstaller proxhy.spec
 from proxhy.main import main
 
 if __name__ == "__main__":
