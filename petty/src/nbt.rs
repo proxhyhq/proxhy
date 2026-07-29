@@ -109,7 +109,41 @@ impl<'a> Reader<'a> {
         self.cur.position()
     }
 
+    /// Validate a wire-supplied count/length before it's used to size a
+    /// `Vec` (e.g. via `(0..n).collect()`, which pre-allocates capacity from
+    /// the range's size hint before reading a single element). A negative or
+    /// oversized count can't legitimately need more bytes than remain in the
+    /// buffer, since every element is at least 1 byte.
+    fn checked_len(&self, n: i32) -> Result<usize, String> {
+        let remaining = self
+            .cur
+            .get_ref()
+            .len()
+            .saturating_sub(self.cur.position() as usize);
+        if n < 0 || n as usize > remaining {
+            return Err(format!(
+                "NBT length field out of range: {n} ({remaining} bytes left in buffer)"
+            ));
+        }
+        Ok(n as usize)
+    }
+
     fn read_n(&mut self, n: usize) -> Result<Vec<u8>, String> {
+        // Length fields come straight off the wire (or out of a malformed
+        // write elsewhere); never let one drive an allocation before we know
+        // the buffer actually has that many bytes left. A corrupted/negative
+        // length reinterpreted as usize would otherwise blow way past
+        // isize::MAX and panic with "capacity overflow" inside vec![].
+        let remaining = self
+            .cur
+            .get_ref()
+            .len()
+            .saturating_sub(self.cur.position() as usize);
+        if n > remaining {
+            return Err(format!(
+                "NBT read past end of buffer: wanted {n} bytes, {remaining} remaining"
+            ));
+        }
         let mut buf = vec![0u8; n];
         self.cur.read_exact(&mut buf).map_err(|e| e.to_string())?;
         Ok(buf)
@@ -179,13 +213,15 @@ impl<'a> Reader<'a> {
             5 => NbtValue::Float(self.f32()?),
             6 => NbtValue::Double(self.f64()?),
             7 => {
-                let n = self.i32()? as usize;
+                let raw_n = self.i32()?;
+                let n = self.checked_len(raw_n)?;
                 NbtValue::ByteArray(self.read_n(n)?.into_iter().map(|b| b as i8).collect())
             }
             8 => NbtValue::Str(self.string()?),
             9 => {
                 let item_tag = self.u8()?;
-                let count = self.i32()? as usize;
+                let raw_count = self.i32()?;
+                let count = self.checked_len(raw_count)?;
                 let items = (0..count)
                     .map(|_| self.payload(item_tag))
                     .collect::<Result<_, _>>()?;
@@ -207,11 +243,13 @@ impl<'a> Reader<'a> {
                 NbtValue::Compound(entries)
             }
             11 => {
-                let n = self.i32()? as usize;
+                let raw_n = self.i32()?;
+                let n = self.checked_len(raw_n)?;
                 NbtValue::IntArray((0..n).map(|_| self.i32()).collect::<Result<_, _>>()?)
             }
             12 => {
-                let n = self.i32()? as usize;
+                let raw_n = self.i32()?;
+                let n = self.checked_len(raw_n)?;
                 NbtValue::LongArray((0..n).map(|_| self.i64()).collect::<Result<_, _>>()?)
             }
             t => return Err(format!("unknown tag {t}")),
@@ -575,17 +613,19 @@ fn py_to_nbt(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<(String, NbtVal
     try_tag!(TagLongArray, LongArray);
 
     if let Ok(t) = obj.extract::<PyRef<TagList>>() {
-        let items = t
+        let items: Vec<NbtValue> = t
             .value
             .iter()
             .map(|v| py_to_nbt(py, v.bind(py)).map(|(_, val)| val))
             .collect::<PyResult<_>>()?;
+        // Derive the on-wire tag_type from the actual converted items rather
+        // than trusting the stored field: list_to_tag() hardcodes 0 for the
+        // general (non-empty, non-all-int) case, e.g. any list[str]. Writing
+        // that stale/wrong type_id desyncs the reader on every list entry.
+        let tag_type = items.first().map(NbtValue::type_id).unwrap_or(0);
         return Ok((
             t.name.clone().unwrap_or_default(),
-            NbtValue::List {
-                tag_type: t.tag_type,
-                items,
-            },
+            NbtValue::List { tag_type, items },
         ));
     }
     if let Ok(t) = obj.extract::<PyRef<TagCompound>>() {

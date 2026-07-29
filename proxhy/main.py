@@ -101,6 +101,12 @@ def parse_args():
         default=False,
         help="Use the asyncio event loop instead of a faster platform-specific alternative",
     )
+    parser.add_argument(
+        "--profile",
+        type=float,
+        default=False,
+        help="Log loop stalls that last more than n seconds",
+    )
     return parser.parse_args()
 
 
@@ -319,8 +325,8 @@ async def _main():
 
     loop = asyncio.get_running_loop()
 
-    if args.dev:
-        LoopWatchdog(logger, threshold=0.02).start()
+    if args.profile is not False:
+        LoopWatchdog(logger, threshold=args.profile).start()
 
     def _on_sigint():
         asyncio.create_task(shutdown(loop, server, signal.SIGINT))
