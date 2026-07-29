@@ -11,6 +11,7 @@ dependencies = [
   "cryptography>=48.0.0",
   "httpx>=0.28.1",
   "hypixel-py>=0.4.2",
+  "isal>=1.8.0",
   "keyring>=25.6",
   "mcauth",
   "numba>=0.63.1",

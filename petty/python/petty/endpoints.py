@@ -1,12 +1,13 @@
 import asyncio
 import re
 import traceback
-import zlib
 from abc import ABC
 from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Self
+
+from isal import isal_zlib as zlib
 
 from petty.events import PacketListener, StreamDirection
 from petty.net import ClientStream, ServerStream, State, StreamReader, StreamWriter

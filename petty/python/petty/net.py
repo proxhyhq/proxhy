@@ -1,5 +1,4 @@
 import asyncio
-import zlib
 from asyncio import StreamReader, StreamWriter
 from collections.abc import Iterable
 from enum import Enum
@@ -8,6 +7,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.decrepit.ciphers.modes import CFB8
 from cryptography.hazmat.primitives.ciphers import Cipher
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
+from isal import isal_zlib as zlib
 
 from petty.protocol.datatypes import Chat, Int, String, TextComponent, VarInt
 
