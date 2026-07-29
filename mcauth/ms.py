@@ -20,6 +20,7 @@ Flow:
 
 import secrets
 import time
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, TypedDict
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -28,7 +29,23 @@ import httpx
 from .errors import AuthException, InvalidCredentials, NotPremium
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
+
+
+@asynccontextmanager
+async def _client_or(
+    client: httpx.AsyncClient | None,
+) -> AsyncGenerator[httpx.AsyncClient]:
+    """Use `client` if given, otherwise create+close a throwaway one.
+
+    Lets every function below take an optional shared client (so callers can
+    avoid paying SSL-context setup per call) while still working standalone.
+    """
+    if client is not None:
+        yield client
+    else:
+        async with httpx.AsyncClient() as c:
+            yield c
 
 
 class LoginResult(TypedDict):
@@ -205,6 +222,7 @@ def parse_auth_code_url(url: str, expected_state: str | None = None) -> str:
 async def request_device_code(
     client_id: str,
     timeout: float = DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
 ) -> DeviceCodeResponse:
     """
     Request a device code for the device code flow.
@@ -215,6 +233,7 @@ async def request_device_code(
     Args:
         client_id: Your Azure application client ID
         timeout: Request timeout in seconds
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Dictionary containing user_code, device_code, verification_uri, etc.
@@ -224,7 +243,7 @@ async def request_device_code(
         "scope": SCOPE,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         resp = await client.post(
             AZURE_DEVICE_CODE_URL,
             data=data,
@@ -259,6 +278,7 @@ async def poll_device_code(
     expires_in: int = 900,
     timeout: float = DEFAULT_TIMEOUT,
     on_pending: Callable[[], None] | None = None,
+    client: httpx.AsyncClient | None = None,
 ) -> dict[str, str]:
     """
     Poll for the device code authentication result.
@@ -270,6 +290,7 @@ async def poll_device_code(
         expires_in: When the device code expires
         timeout: Request timeout in seconds
         on_pending: Optional callback called while waiting for user
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Dictionary containing access_token and refresh_token
@@ -282,7 +303,7 @@ async def poll_device_code(
         "device_code": device_code,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         while True:
             if time.time() - start_time > expires_in:
                 raise AuthException(
@@ -347,6 +368,7 @@ async def get_authorization_token(
     auth_code: str,
     code_verifier: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
 ) -> dict[str, str]:
     """
     Exchange an authorization code for tokens.
@@ -357,6 +379,7 @@ async def get_authorization_token(
         auth_code: The authorization code from the redirect
         code_verifier: The PKCE code verifier (if using secure login)
         timeout: Request timeout in seconds
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Dictionary containing access_token and refresh_token
@@ -372,7 +395,7 @@ async def get_authorization_token(
     if code_verifier:
         data["code_verifier"] = code_verifier
 
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         resp = await client.post(
             AZURE_TOKEN_URL,
             data=data,
@@ -400,6 +423,7 @@ async def refresh_authorization_token(
     client_id: str,
     refresh_token: str,
     timeout: float = DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
 ) -> dict[str, str]:
     """
     Refresh an access token using a refresh token.
@@ -408,6 +432,7 @@ async def refresh_authorization_token(
         client_id: Your Azure application client ID
         refresh_token: The refresh token from a previous login
         timeout: Request timeout in seconds
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Dictionary containing access_token and refresh_token
@@ -419,7 +444,7 @@ async def refresh_authorization_token(
         "scope": SCOPE,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         resp = await client.post(
             AZURE_TOKEN_URL,
             data=data,
@@ -461,6 +486,7 @@ async def refresh_authorization_token(
 async def authenticate_with_xbl(
     access_token: str,
     timeout: float = DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str]:
     """
     Authenticate with Xbox Live using a Microsoft access token.
@@ -468,6 +494,7 @@ async def authenticate_with_xbl(
     Args:
         access_token: Microsoft OAuth2 access token
         timeout: Request timeout in seconds
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Tuple of (xbl_token, user_hash)
@@ -482,7 +509,7 @@ async def authenticate_with_xbl(
         "TokenType": "JWT",
     }
 
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         resp = await client.post(
             XBL_AUTH_URL,
             json=payload,
@@ -522,6 +549,7 @@ async def authenticate_with_xbl(
 async def authenticate_with_xsts(
     xbl_token: str,
     timeout: float = DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str]:
     """
     Get an XSTS token using an Xbox Live token.
@@ -529,6 +557,7 @@ async def authenticate_with_xsts(
     Args:
         xbl_token: Xbox Live token from authenticate_with_xbl
         timeout: Request timeout in seconds
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Tuple of (xsts_token, user_hash)
@@ -542,7 +571,7 @@ async def authenticate_with_xsts(
         "TokenType": "JWT",
     }
 
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         resp = await client.post(
             XSTS_AUTH_URL,
             json=payload,
@@ -599,6 +628,7 @@ async def authenticate_with_minecraft(
     user_hash: str,
     xsts_token: str,
     timeout: float = DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
 ) -> str:
     """
     Authenticate with Minecraft using XSTS credentials.
@@ -607,6 +637,7 @@ async def authenticate_with_minecraft(
         user_hash: User hash from XSTS authentication
         xsts_token: XSTS token
         timeout: Request timeout in seconds
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Minecraft access token
@@ -616,7 +647,7 @@ async def authenticate_with_minecraft(
         "ensureLegacyEnabled": True,
     }
 
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         resp = await client.post(
             MC_LOGIN_URL,
             json=payload,
@@ -645,6 +676,7 @@ async def authenticate_with_minecraft(
 async def check_ownership(
     mc_access_token: str,
     timeout: float = DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
 ) -> bool:
     """
     Check if the account owns Minecraft: Java Edition.
@@ -652,11 +684,12 @@ async def check_ownership(
     Args:
         mc_access_token: Minecraft access token
         timeout: Request timeout in seconds
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         True if the account owns the game
     """
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         resp = await client.get(
             MC_ENTITLEMENTS_URL,
             headers={"Authorization": f"Bearer {mc_access_token}"},
@@ -682,6 +715,7 @@ async def check_ownership(
 async def get_profile(
     mc_access_token: str,
     timeout: float = DEFAULT_TIMEOUT,
+    client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str]:
     """
     Get the Minecraft profile (username and UUID).
@@ -689,11 +723,12 @@ async def get_profile(
     Args:
         mc_access_token: Minecraft access token
         timeout: Request timeout in seconds
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Tuple of (username, uuid)
     """
-    async with httpx.AsyncClient() as client:
+    async with _client_or(client) as client:
         resp = await client.get(
             MC_PROFILE_URL,
             headers={"Authorization": f"Bearer {mc_access_token}"},
@@ -729,6 +764,7 @@ async def complete_login(
     client_id: str,
     ms_access_token: str,
     ms_refresh_token: str = "",
+    client: httpx.AsyncClient | None = None,
 ) -> LoginResult:
     """
     Complete the full Minecraft authentication after obtaining Microsoft tokens.
@@ -739,28 +775,31 @@ async def complete_login(
         client_id: Your Azure application client ID (for future refresh)
         ms_access_token: Microsoft OAuth2 access token
         ms_refresh_token: Microsoft OAuth2 refresh token
+        client: Optional shared httpx client; a throwaway one is used per call if omitted
 
     Returns:
         LoginResult with Minecraft access_token, username, uuid, and refresh_token
     """
     # Xbox Live authentication
-    xbl_token, _ = await authenticate_with_xbl(ms_access_token)
+    xbl_token, _ = await authenticate_with_xbl(ms_access_token, client=client)
 
     # XSTS token
-    xsts_token, user_hash = await authenticate_with_xsts(xbl_token)
+    xsts_token, user_hash = await authenticate_with_xsts(xbl_token, client=client)
 
     # Minecraft authentication
-    mc_access_token = await authenticate_with_minecraft(user_hash, xsts_token)
+    mc_access_token = await authenticate_with_minecraft(
+        user_hash, xsts_token, client=client
+    )
 
     # Verify ownership
-    if not await check_ownership(mc_access_token):
+    if not await check_ownership(mc_access_token, client=client):
         raise NotPremium(
             "This account does not own Minecraft: Java Edition",
             code="MC-NOT-PREMIUM",
         )
 
     # Get profile
-    username, uuid = await get_profile(mc_access_token)
+    username, uuid = await get_profile(mc_access_token, client=client)
 
     return {
         "access_token": mc_access_token,
@@ -773,6 +812,7 @@ async def complete_login(
 async def complete_refresh(
     client_id: str,
     refresh_token: str,
+    client: httpx.AsyncClient | None = None,
 ) -> LoginResult:
     """
     Refresh authentication using a stored refresh token.
@@ -780,18 +820,20 @@ async def complete_refresh(
     Args:
         client_id: Your Azure application client ID
         refresh_token: The refresh token from a previous login
+        client: Optional shared httpx client; a throwaway one is used per call if omitted
 
     Returns:
         LoginResult with new tokens and profile
     """
     # Refresh Microsoft token
-    tokens = await refresh_authorization_token(client_id, refresh_token)
+    tokens = await refresh_authorization_token(client_id, refresh_token, client=client)
 
     # Complete login with new tokens
     return await complete_login(
         client_id,
         tokens["access_token"],
         tokens["refresh_token"],
+        client=client,
     )
 
 
@@ -847,7 +889,9 @@ async def login(email: str, password: str) -> LoginResult:
     )
 
 
-async def login_with_refresh_token(refresh_token: str) -> LoginResult:
+async def login_with_refresh_token(
+    refresh_token: str, client: httpx.AsyncClient | None = None
+) -> LoginResult:
     """
     Login using a refresh token.
 
@@ -855,15 +899,18 @@ async def login_with_refresh_token(refresh_token: str) -> LoginResult:
 
     Args:
         refresh_token: The refresh token from a previous login
+        client: Optional shared httpx client; a throwaway one is used per call if omitted
 
     Returns:
         LoginResult with new tokens and profile
     """
     client_id = get_client_id()
-    return await complete_refresh(client_id, refresh_token)
+    return await complete_refresh(client_id, refresh_token, client=client)
 
 
-async def refresh_ms_token(refresh_token: str) -> dict[str, str]:
+async def refresh_ms_token(
+    refresh_token: str, client: httpx.AsyncClient | None = None
+) -> dict[str, str]:
     """
     Refresh a Microsoft access token.
 
@@ -871,9 +918,10 @@ async def refresh_ms_token(refresh_token: str) -> dict[str, str]:
 
     Args:
         refresh_token: The refresh token from a previous login
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Dictionary containing access_token and refresh_token
     """
     client_id = get_client_id()
-    return await refresh_authorization_token(client_id, refresh_token)
+    return await refresh_authorization_token(client_id, refresh_token, client=client)

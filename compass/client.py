@@ -3,7 +3,9 @@ import json
 import logging
 import os
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx
 import pyroh
@@ -18,9 +20,24 @@ from petty.protocol.datatypes import Buffer, ByteArray, String, VarInt
 
 from .errors import RequestFailure
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
 logger = logging.getLogger(__name__)
 
 SESSION_SERVER_JOIN_URL = "https://sessionserver.mojang.com/session/minecraft/join"
+
+
+@asynccontextmanager
+async def _client_or(
+    client: httpx.AsyncClient | None,
+) -> AsyncGenerator[httpx.AsyncClient]:
+    """Use `client` if given, otherwise create+close a throwaway one."""
+    if client is not None:
+        yield client
+    else:
+        async with httpx.AsyncClient() as c:
+            yield c
 
 
 class ByteCounter:
@@ -80,6 +97,7 @@ class CompassClient(Server):
         username: str,
         uuid: str,
         access_token: str,
+        http_client: httpx.AsyncClient | None = None,
     ):
         self.state = State.LOGIN
 
@@ -88,6 +106,7 @@ class CompassClient(Server):
         self.uuid = uuid  # without dashes
 
         self.broker_url = broker_url
+        self._http_client = http_client
 
         self._shared_secret: bytes | None = None
         self._registered = asyncio.Event()
@@ -111,7 +130,7 @@ class CompassClient(Server):
         self.endpoint = endpoint
 
         async with asyncio.timeout(5):
-            async with httpx.AsyncClient() as client:
+            async with _client_or(self._http_client) as client:
                 ticket = (
                     await client.get(f"{self.broker_url.rstrip('/')}/ticket")
                 ).content.decode("utf-8")
@@ -150,7 +169,7 @@ class CompassClient(Server):
             "serverId": server_hash,
         }
 
-        async with httpx.AsyncClient() as client:
+        async with _client_or(self._http_client) as client:
             resp = await client.post(SESSION_SERVER_JOIN_URL, json=payload)
 
             if resp.status_code != 204:

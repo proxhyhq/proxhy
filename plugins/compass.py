@@ -6,6 +6,7 @@ from petty.protocol.datatypes import TextComponent
 import mcauth as auth
 from compass import CompassClient, RequestFailure
 from plugins.commands import CommandException, CommandGroup
+from proxhy.session import http_client
 
 if TYPE_CHECKING:
     from proxhy.plugin import ProxhyPlugin
@@ -23,6 +24,7 @@ class CompassPlugin:
             username="",
             uuid="",
             access_token="",
+            http_client=http_client,
         )  # so I can say that compass_client is not optional lol
 
         self._setup_compass_commands()
@@ -74,7 +76,7 @@ class CompassPlugin:
 
     async def initialize_cc(self: ProxhyPlugin):
         self.access_token, self.username, self.uuid = await auth.load_auth_info(
-            self.username
+            self.username, client=http_client
         )
         self.uuid = self.uuid
 
@@ -83,6 +85,7 @@ class CompassPlugin:
             username=self.username,
             uuid=str(self.uuid),
             access_token=self.access_token,
+            http_client=http_client,
         )
 
         if self.endpoint is None:

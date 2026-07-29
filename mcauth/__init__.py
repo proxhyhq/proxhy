@@ -27,6 +27,7 @@ import uuid as uuid_mod
 from pathlib import Path
 from typing import Any
 
+import httpx
 import jwt
 import keyring
 import orjson
@@ -91,7 +92,9 @@ def get_client_id() -> str:
 # ============================================================================
 
 
-async def request_device_code() -> ms.DeviceCodeResponse:
+async def request_device_code(
+    client: httpx.AsyncClient | None = None,
+) -> ms.DeviceCodeResponse:
     """
     Start the device code authentication flow.
 
@@ -103,6 +106,9 @@ async def request_device_code() -> ms.DeviceCodeResponse:
     - expires_in: Seconds until the code expires
     - interval: Polling interval in seconds
 
+    Args:
+        client: Optional shared httpx client; a throwaway one is used if omitted
+
     Example:
         device = await auth.request_device_code()
         print(device["message"])
@@ -110,7 +116,7 @@ async def request_device_code() -> ms.DeviceCodeResponse:
         result = await auth.complete_device_code_login(device["device_code"])
     """
     client_id = ms.get_client_id()
-    return await ms.request_device_code(client_id)
+    return await ms.request_device_code(client_id, client=client)
 
 
 async def complete_device_code_login(
@@ -118,6 +124,7 @@ async def complete_device_code_login(
     interval: int = 5,
     expires_in: int = 900,
     on_pending: Any | None = None,
+    client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str, str]:
     """
     Complete device code login and cache credentials.
@@ -130,6 +137,7 @@ async def complete_device_code_login(
         interval: Polling interval in seconds
         expires_in: Seconds until timeout
         on_pending: Optional callback called while waiting
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Tuple of (access_token, username, uuid)
@@ -146,6 +154,7 @@ async def complete_device_code_login(
         interval=interval,
         expires_in=expires_in,
         on_pending=on_pending,
+        client=client,
     )
 
     # Complete Xbox/Minecraft authentication
@@ -153,6 +162,7 @@ async def complete_device_code_login(
         client_id,
         tokens["access_token"],
         tokens["refresh_token"],
+        client=client,
     )
 
     # Cache credentials
@@ -209,6 +219,7 @@ async def complete_auth_code_login(
     redirect_uri: str,
     auth_code: str,
     code_verifier: str | None = None,
+    client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str, str]:
     """
     Complete login after receiving an authorization code.
@@ -217,6 +228,7 @@ async def complete_auth_code_login(
         redirect_uri: The same redirect_uri used in get_login_url
         auth_code: The authorization code from the callback URL
         code_verifier: PKCE verifier if using secure login
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Tuple of (access_token, username, uuid)
@@ -229,6 +241,7 @@ async def complete_auth_code_login(
         redirect_uri,
         auth_code,
         code_verifier,
+        client=client,
     )
 
     # Complete Xbox/Minecraft authentication
@@ -236,6 +249,7 @@ async def complete_auth_code_login(
         client_id,
         tokens["access_token"],
         tokens["refresh_token"],
+        client=client,
     )
 
     # Cache credentials
@@ -394,13 +408,17 @@ def token_needs_refresh(username: str) -> bool:
 
 
 async def load_auth_info(
-    username: str = "", refresh_if_expired: bool = True
+    username: str = "",
+    refresh_if_expired: bool = True,
+    client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str, uuid_mod.UUID]:
     """
     Load cached auth info and refresh token if needed.
 
     Args:
         username: The Minecraft username to load credentials for
+        refresh_if_expired: Refresh the token if it's stale
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Tuple of (access_token, username, uuid)
@@ -420,7 +438,7 @@ async def load_auth_info(
 
     if token_needs_refresh(username) and refresh_if_expired:
         access_token, refresh_token = await _refresh_and_update_tokens(
-            username, refresh_token, uuid
+            username, refresh_token, uuid, client=client
         )
 
     return access_token, username, uuid_mod.UUID(uuid)
@@ -430,9 +448,10 @@ async def _refresh_and_update_tokens(
     username: str,
     refresh_token: str,
     uuid: str,
+    client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str]:
     """Helper function to refresh tokens and update storage."""
-    result = await ms.login_with_refresh_token(refresh_token)
+    result = await ms.login_with_refresh_token(refresh_token, client=client)
     access_token = result["access_token"]
     new_refresh_token = result["refresh_token"]
 
@@ -444,17 +463,20 @@ async def _refresh_and_update_tokens(
         return access_token, refresh_token
 
 
-async def login_with_refresh_token(refresh_token: str) -> tuple[str, str, str]:
+async def login_with_refresh_token(
+    refresh_token: str, client: httpx.AsyncClient | None = None
+) -> tuple[str, str, str]:
     """
     Login using a refresh token.
 
     Args:
         refresh_token: The refresh token from a previous login
+        client: Optional shared httpx client; a throwaway one is used if omitted
 
     Returns:
         Tuple of (access_token, username, uuid)
     """
-    result = await ms.login_with_refresh_token(refresh_token)
+    result = await ms.login_with_refresh_token(refresh_token, client=client)
 
     access_token = result["access_token"]
     username = result["username"]

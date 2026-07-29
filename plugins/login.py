@@ -190,7 +190,7 @@ class LoginPlugin:
 
         if self.CONNECT_HOST[0] not in {"localhost", "127.0.0.1", "::1"}:
             self.access_token, self.username, self.uuid = await auth.load_auth_info(
-                self.username
+                self.username, client=http_client
             )
 
             async with Cache() as cache:
@@ -206,7 +206,7 @@ class LoginPlugin:
 
     async def _start_device_code_flow(self: ProxhyPlugin):
         try:
-            device = await auth.request_device_code()
+            device = await auth.request_device_code(client=http_client)
 
             self.downstream.chat(
                 TextComponent("To log in, visit")
@@ -243,6 +243,7 @@ class LoginPlugin:
                     interval=device.get("interval", 5),
                     expires_in=device.get("expires_in", 900),
                     on_pending=on_pending,
+                    client=http_client,
                 )
             except auth.AuthException as e:
                 if e.code == "XSTS-2148916233":
@@ -333,7 +334,7 @@ class LoginPlugin:
 
         try:
             _, _, uuid_ = await auth.load_auth_info(
-                self.username, refresh_if_expired=False
+                self.username, refresh_if_expired=False, client=http_client
             )
         except RuntimeError:
             try:
@@ -405,7 +406,7 @@ class LoginPlugin:
             )
             try:
                 self.access_token, self.username, self.uuid = await auth.load_auth_info(
-                    self.username
+                    self.username, client=http_client
                 )
             except InvalidCredentials as err:
                 self.downstream.chat(
@@ -528,7 +529,7 @@ class LoginPlugin:
 
         if not (self.access_token or has_uuid):
             self.access_token, self.username, self.uuid = await auth.load_auth_info(
-                self.username
+                self.username, client=http_client
             )
 
         payload = {
@@ -564,28 +565,25 @@ class LoginPlugin:
             self.create_task(self._check_for_update())
 
     async def _check_for_update(self: ProxhyPlugin):
-        async with httpx.AsyncClient() as aclient:
-            current = utils.zero_pad_calver(version("proxhy"))
-            try:
-                latest = (
-                    (
-                        await aclient.get(
-                            "https://api.github.com/repos/proxhyhq/proxhy/releases/latest"
-                        )
+        current = utils.zero_pad_calver(version("proxhy"))
+        try:
+            latest = (
+                (
+                    await http_client.get(
+                        "https://api.github.com/repos/proxhyhq/proxhy/releases/latest"
                     )
-                    .json()
-                    .get("name")
                 )
-            except JSONDecodeError:
-                self.logger.warning(
-                    "failed to fetch current release version: could not parse API response"
-                )
-                return
-            except httpx.ReadTimeout:
-                self.logger.warning(
-                    "failed to fetch current release version: timed out"
-                )
-                return
+                .json()
+                .get("name")
+            )
+        except JSONDecodeError:
+            self.logger.warning(
+                "failed to fetch current release version: could not parse API response"
+            )
+            return
+        except httpx.ReadTimeout:
+            self.logger.warning("failed to fetch current release version: timed out")
+            return
 
         base_url = "https://github.com/proxhyhq/proxhy/releases/tag/v{}"
         current_url = base_url.format(current)

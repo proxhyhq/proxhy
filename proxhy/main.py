@@ -215,10 +215,17 @@ async def shutdown(loop: asyncio.AbstractEventLoop, server: ProxhyServer, _):
     """Handle graceful shutdown with force option on second interrupt."""
     server.num_cancels += 1
 
+    try:
+        await _shutdown(loop, server)
+    finally:
+        await session.http_client.aclose()
+        loop.stop()
+
+
+async def _shutdown(loop: asyncio.AbstractEventLoop, server: ProxhyServer) -> None:
     if server.num_cancels > 1:
         print("\nForcing shutdown...", end=" ", flush=True)
         close_tasks = [instance.close(force=True) for instance in instances]
-        close_tasks.append(session.http_client.aclose())
 
         if close_tasks:
             try:
@@ -239,7 +246,6 @@ async def shutdown(loop: asyncio.AbstractEventLoop, server: ProxhyServer, _):
             await asyncio.gather(*pending, return_exceptions=True)
 
         print("done!")
-        loop.stop()
         return
 
     if instances:
@@ -299,10 +305,7 @@ async def shutdown(loop: asyncio.AbstractEventLoop, server: ProxhyServer, _):
         print("Shutting down...", end=" ", flush=True)
         server.close()
         await server.wait_closed()
-        await session.http_client.aclose()
         print("done!")
-
-    loop.stop()
 
 
 async def _main():
@@ -317,7 +320,7 @@ async def _main():
     loop = asyncio.get_running_loop()
 
     if args.dev:
-        LoopWatchdog(logger).start()
+        LoopWatchdog(logger, threshold=0.02).start()
 
     def _on_sigint():
         asyncio.create_task(shutdown(loop, server, signal.SIGINT))
