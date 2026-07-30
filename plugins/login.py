@@ -419,6 +419,16 @@ class LoginPlugin:
                 )
                 self.device_code_task = self.create_task(self._start_device_code_flow())
                 return
+            except httpx.ConnectError, httpx.ConnectTimeout:
+                return self.downstream.send_packet(
+                    0x40,
+                    Chat.pack(
+                        TextComponent(
+                            "Failed to regenerate credentials due to a connection error."
+                            "\nAre you offline?"
+                        )
+                    ),
+                )
             except Exception as e:
                 return self.downstream.send_packet(
                     0x40,

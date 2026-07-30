@@ -198,7 +198,7 @@ wheels = [
 
 [[package]]
 name = "compass"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "compass" }
 dependencies = [
     { name = "aiohttp" },
@@ -510,7 +510,7 @@ wheels = [
 
 [[package]]
 name = "mcauth"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "mcauth" }
 dependencies = [
     { name = "cryptography" },
