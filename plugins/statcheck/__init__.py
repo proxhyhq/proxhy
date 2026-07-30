@@ -453,24 +453,26 @@ class StatCheckPlugin:
         fetch_response = await self.populate_player(player)
         if not fetch_response.ok:
             self.game_errors[player].append(fetch_response)
-            return
+        else:
+            player.display_name = (
+                display_name := self._build_player_display_name(player)
+            )
+            self.game_players[player.username] = player
 
-        player.display_name = (display_name := self._build_player_display_name(player))
-        self.game_players[player.username] = player
+            show_stats = self.settings.bedwars.tablist.stats.show_stats.get() == "ON"
 
-        show_stats = self.settings.bedwars.tablist.stats.show_stats.get() == "ON"
+            if show_stats:
+                if player.status in {
+                    GamePlayerStatus.ELIMINATED,
+                    GamePlayerStatus.RESPAWNING,
+                }:
+                    self._send_tablist_update(
+                        {player.offline_uuid: self._get_dead_display_name(player)}
+                    )
+                else:
+                    self._send_tablist_update({player.uuid: display_name})
 
-        if show_stats:
-            if player.status in {
-                GamePlayerStatus.ELIMINATED,
-                GamePlayerStatus.RESPAWNING,
-            }:
-                self._send_tablist_update(
-                    {player.offline_uuid: self._get_dead_display_name(player)}
-                )
-            else:
-                self._send_tablist_update({player.uuid: display_name})
-
+        player.stats_fetched = True
         await self.emit("statcheck:update", player)
 
     def _compile_errors(
@@ -483,26 +485,26 @@ class StatCheckPlugin:
                     detail = error.detail or error.status.name.lower()
                     usernames_by_error[(error.provider, detail)].append(player.username)
 
-        msg = TextComponent(
-            "The following errors occurred while fetching stats!"
-        ).color("red")
+        msg = (
+            TextComponent("The following ")
+            .color("gray")
+            .append(TextComponent("errors").color("red"))
+            .appends(TextComponent("occurred while fetching stats:").color("gray"))
+        )
         for (provider, detail), usernames in usernames_by_error.items():
             msg.append(
-                TextComponent(f"\n- [{provider.display_name()}] {detail} ")
+                TextComponent("\n")
                 .color("gray")
-                .append(TextComponent(f"({', '.join(usernames)})").color("dark_gray"))
+                .append(TextComponent(f"   [{provider.display_name()}] ").color("gold"))
+                .append(TextComponent(f"{detail}").color("red"))
+                .append(TextComponent(":").color("gray"))
+                .appends(TextComponent(", ".join(usernames)).color("gray").italic())
             )
         return msg
 
     @subscribe("statcheck:update")
     async def _event_statcheck_update(self: ProxhyPlugin, _match, data: GamePlayer):
-        # TODO: can we really trust HypixelProvider's population as a source
-        # of truth re. who has received stats here?
-        if all(
-            (pdata := player._provider_data[HypixelProvider]) is not None
-            and pdata.data is not None  # TODO: is this correct?
-            for player in self.game_players.values()
-        ):
+        if all(player.stats_fetched for player in self.game_players.values()):
             # send collected errors
             if self.game_errors:
                 self.downstream.chat(self._compile_errors(self.game_errors))
@@ -761,7 +763,8 @@ class StatCheckPlugin:
 
             _fppd = player._provider_data[HypixelProvider]
             if _fppd is None or _fppd.data is None:
-                raise RuntimeError("This should not happen!")
+                self.logger.debug("no hypixel stats; cannot highlight")
+                return
 
             fdict = _fppd.data
 

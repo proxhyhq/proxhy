@@ -223,7 +223,7 @@ class Provider[CT: _HasClose, PT](ABC):
 
         if self._key_valid is False:
             return PopulateResult(
-                PopulateStatus.SKIP, self._retries_left(slot), "invalid api key"
+                PopulateStatus.SKIP, self._retries_left(slot), "Invalid API Key"
             )
 
         slot.attempts += 1
@@ -300,24 +300,24 @@ class HypixelProvider(Provider[hypixel.Client, Nick | dict[str, str | float | in
         except hypixel.InvalidApiKey:
             self._key_valid = False
             outcome = FetchOutcome.SKIP
-            details = "invalid api key"
+            details = "Invalid API Key"
         except hypixel.KeyRequired:
             # self._key_valid = False ?
             outcome = FetchOutcome.SKIP
-            details = "no api key provided"
+            details = "No API Key Provided"
 
         # except RateLimitError: # should not happen
 
         except TimeoutError, hypixel.TimeoutError:
             outcome = FetchOutcome.TRANSIENT
-            details = "request timed out"
+            details = "Request Timed Out"
         except hypixel.ApiError:
             outcome = FetchOutcome.TRANSIENT
-            details = "unknown api error"
+            details = "Unknown API Error"
         except Exception:
             # TODO: log
             outcome = FetchOutcome.TRANSIENT
-            details = "unknown error"
+            details = "Unknown Error"
         else:
             if player.username != player_result.name:
                 # TODO: log
@@ -585,6 +585,8 @@ class GamePlayer:
     default_display_name: str = field(init=False)
     respawn_timer_task: asyncio.Task | None = field(default=None, init=False)
     offline_uuid: uuid.UUID = field(init=False)
+    # set once populate_player() has run (successfully or not)
+    stats_fetched: bool = field(default=False, init=False)
     _provider_data: ProviderCacheDict = field(
         default_factory=ProviderCacheDict, init=False, repr=False
     )
