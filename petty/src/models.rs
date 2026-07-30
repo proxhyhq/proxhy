@@ -639,6 +639,10 @@ impl TextComponent {
     pub fn color(
         slf: PyRefMut<'_, Self>,
         py: Python<'_>,
+        #[gen_stub(override_type(
+            type_repr = "datatypes.Color_T",
+            imports = ("petty.protocol.datatypes")
+        ))]
         color: String,
     ) -> PyResult<Py<TextComponent>> {
         slf.data
