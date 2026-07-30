@@ -133,10 +133,8 @@ if not args.use_asyncio:
         import winloop as loop_impl  # type: ignore
     else:
         import uvloop as loop_impl  # type: ignore
-
-    loop_impl.install()
 else:
-    loop_impl = asyncio  # for logging
+    loop_impl = asyncio
 
 
 class ProxhyServer:
@@ -347,7 +345,7 @@ async def _main():
 
 def main():
     try:
-        asyncio.run(_main())
+        loop_impl.run(_main())
     except RuntimeError:  # forced shutdown
         sys.exit()
 
