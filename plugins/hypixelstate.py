@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 import orjson
 from petty.events import listen_client, listen_server, subscribe
-from petty.protocol.datatypes import Buffer, ByteArray, Chat, Int, String
+from petty.protocol.datatypes import Buffer, Chat, Int, String
 
 from proxhypixel.models import Game
 
@@ -70,7 +70,9 @@ class HypixelStatePlugin:
         self.upstream.send_packet(0x17, buff.getvalue())
 
         channel = buff.unpack(String)
-        data = buff.unpack(ByteArray)
+        # plugin message data field is listed as Byte Array on the wiki,
+        # but it has no length prefix (it's just whatever is left)
+        data = buff.read()
         if channel == "MC|Brand":
             if b"lunarclient" in data:
                 self.client_type = "lunar"
