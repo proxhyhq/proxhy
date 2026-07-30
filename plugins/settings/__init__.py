@@ -6,7 +6,8 @@ from petty.nbt import dumps, from_dict
 from petty.protocol.datatypes import Item, SlotData, TextComponent
 
 from plugins.commands import command
-from plugins.window import Window
+from plugins.window import Window, get_trigger
+from plugins.window._window import Trigger
 from proxhy.argtypes import SettingPath, SettingValue
 from proxhy.settings import ProxhySettings
 
@@ -108,6 +109,8 @@ class SettingsMenu(Window):
 
     @staticmethod
     def get_setting_toggle_msg(
+        verb: str,
+        trigger: Trigger,
         s_display: str,
         old_state: str,
         new_state: str,
@@ -115,13 +118,14 @@ class SettingsMenu(Window):
         new_state_color: str,
     ) -> TextComponent:
         return (
-            TextComponent("Changed ")
-            .append(TextComponent(s_display).color("yellow"))
+            TextComponent(verb.capitalize())
+            .appends(TextComponent(s_display).color("yellow"))
             .appends("from")
             .appends(TextComponent(old_state.upper()).bold().color(old_state_color))  # type: ignore
             .appends("to")
             .appends(TextComponent(new_state.upper()).bold().color(new_state_color))  # type: ignore
             .append("!")
+            .appends(TextComponent(f"({trigger})").color("gray"))
         )
 
     def get_state_item(self, setting: Setting, state: str) -> SlotData:
@@ -267,16 +271,47 @@ class SettingsMenu(Window):
         mode: int,
         clicked_item: SlotData,
     ):
+        trigger = get_trigger(mode, button, slot)
+        if trigger is None:
+            # should not happen
+            # TODO: strongly type callback fields?
+            self.proxy.logger.warning(
+                "callback received invalid mode, button, slot:"
+                f"{mode=}, {button=}, {slot=}"
+            )
+            return
+
         setting_name = self.menu_slots.get(slot + 1)
         if not setting_name:
-            raise KeyError(f"Slot {slot + 1} has no associated element")
+            self.proxy.logger.warning(f"slot {slot + 1} has no associated element")
+            return
 
         s_path = (
             f"{self.subsetting_path}.{setting_name}"
             if self.subsetting_path
             else setting_name
         )
-        prev_state, next_state = self.settings.toggle_setting_by_path(s_path)
+
+        verb = "changed"
+
+        if trigger == "left_click":
+            verb = "toggled"
+            # toggle setting forward
+            prev_state, next_state = self.settings.toggle_setting_by_path(s_path)
+        elif trigger == "right_click":
+            verb = "toggled"
+            # toggle setting backward
+            prev_state, next_state = self.settings.toggle_setting_by_path_backward(
+                s_path
+            )
+        elif trigger in {"shift_left_click", "shift_right_click"}:
+            verb = "reset"
+            # reset setting
+            prev_state, next_state = self.settings.reset_setting_by_path(s_path)
+        else:
+            # don't trigger on any other toggle
+            return
+
         self.clear()
         self.build()
 
@@ -284,6 +319,8 @@ class SettingsMenu(Window):
         _, prev_color = s_raw.states[prev_state]  # type: ignore
         _, next_color = s_raw.states[next_state]  # type: ignore
         msg = self.get_setting_toggle_msg(
+            verb,
+            trigger,
             s_raw.display_name,
             prev_state,
             next_state,

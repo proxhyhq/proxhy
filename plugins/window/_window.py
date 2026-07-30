@@ -188,7 +188,7 @@ class Window:
 # 5    | 6      | -999   | Ending right mouse drag
 # 6    | 0      | Normal | Double click
 
-Triggers = Literal[
+Trigger = Literal[
     "left_click",
     "right_click",
     "shift_left_click",
@@ -216,7 +216,7 @@ Triggers = Literal[
     "double_click",
 ]
 
-TRIGGERS: dict[tuple[int, int, Literal[-999] | None], Triggers] = {
+TRIGGERS: dict[tuple[int, int, Literal[-999] | None], Trigger] = {
     (0, 0, None): "left_click",
     (0, 1, None): "right_click",
     (1, 0, None): "shift_left_click",
@@ -245,7 +245,7 @@ TRIGGERS: dict[tuple[int, int, Literal[-999] | None], Triggers] = {
 }
 
 
-def get_trigger(mode: int, button: int, slot: int) -> Triggers | None:
+def get_trigger(mode: int, button: int, slot: int) -> Trigger | None:
     if slot != -999:
         return TRIGGERS.get((mode, button, None), None)
     else:

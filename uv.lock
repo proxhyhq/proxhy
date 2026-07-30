@@ -686,7 +686,6 @@ wheels = [
 
 [[package]]
 name = "petty"
-version = "0.2.0"
 source = { editable = "petty" }
 dependencies = [
     { name = "cryptography" },

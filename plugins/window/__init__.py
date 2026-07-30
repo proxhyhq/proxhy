@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from petty.events import listen_client
 from petty.protocol.datatypes import Buffer, Byte, Short, Slot, SlotData, UnsignedByte
 
-from ._window import Window, get_trigger
+from ._window import Trigger, Window, get_trigger
 
 if TYPE_CHECKING:
     from proxhy.plugin import ProxhyPlugin
@@ -74,6 +74,7 @@ __all__ = (
     # ./_window.py
     "Window",
     "WindowPlugin",
+    "Trigger",
     # .
     "get_trigger",
 )

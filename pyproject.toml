@@ -67,6 +67,9 @@ where = ["."]
 [tool.setuptools.package-data]
 "assets" = ["*.json", "*.png"]
 
+[tool.uv]
+reinstall-package = ["petty"]
+
 [tool.uv.workspace]
 members = ["mcauth", "petty", "compass"]
 

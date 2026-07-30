@@ -68,16 +68,25 @@ class Setting[S: str]:
             )
         self._storage.set_setting(self._key, value)
 
-    def reset(self) -> None:
+    def reset(self) -> tuple[S, S]:
         """Reset this setting to its default value."""
+        current_state = self.get()
         self.set(self._default_state)
+        return current_state, self._default_state
 
     def toggle(self) -> tuple[S, S]:
         """Toggle to the next state in the sequence."""
+        return self._step(1)
+
+    def toggle_backward(self) -> tuple[S, S]:
+        """Toggle to the previous state in the sequence."""
+        return self._step(-1)
+
+    def _step(self, direction: int) -> tuple[S, S]:
         current_state = self.get()
         state_keys = list(self._states.keys())
         current_index = state_keys.index(current_state)
-        next_index = (current_index + 1) % len(state_keys)
+        next_index = (current_index + direction) % len(state_keys)
         self.set(state_keys[next_index])
         return current_state, state_keys[next_index]
 
@@ -132,6 +141,15 @@ class SettingGroup:
                 attr_value.reset_all()
 
     def toggle_setting_by_path(self, path: str) -> tuple[Any, Any]:
+        return self._get_setting(path).toggle()
+
+    def toggle_setting_by_path_backward(self, path: str) -> tuple[Any, Any]:
+        return self._get_setting(path).toggle_backward()
+
+    def reset_setting_by_path(self, path: str) -> tuple[Any, Any]:
+        return self._get_setting(path).reset()
+
+    def _get_setting(self, path: str) -> Setting:
         current = self
         for attr in path.split("."):
             if hasattr(current, attr):
@@ -140,7 +158,7 @@ class SettingGroup:
                 raise AttributeError(f"Setting path '{path}' not found")
 
         if isinstance(current, Setting):
-            return current.toggle()
+            return current
         else:
             raise ValueError(f"Path '{path}' does not point to a Setting")
 
