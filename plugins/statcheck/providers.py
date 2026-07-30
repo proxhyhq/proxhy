@@ -2,7 +2,8 @@ import asyncio
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, fields
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, Self
 
@@ -605,6 +606,19 @@ class GamePlayer:
 
     def __hash__(self):
         return hash((self.username, self.uuid))
+
+    def __deepcopy__(self, memo: dict) -> Self:
+        # respawn_timer_task is an asyncio.Task which cannot be deep-copied
+        # (e.g. by emit())
+        copied = object.__new__(type(self))
+        memo[id(self)] = copied
+        for f in fields(self):
+            if f.name == "respawn_timer_task":
+                value = self.respawn_timer_task
+            else:
+                value = deepcopy(getattr(self, f.name), memo)
+            setattr(copied, f.name, value)
+        return copied
 
     def fields(self, keys: Iterable[str]) -> dict[str, str | None]:
         return {k: self.field(k) for k in keys}
