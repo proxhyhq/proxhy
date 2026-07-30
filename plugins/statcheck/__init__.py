@@ -49,70 +49,9 @@ BW_MAPS: dict = load_json_asset("bedwars_maps.json")
 RUSH_MAPPINGS = load_json_asset("rush_mappings.json")
 KILL_MSGS: list[str] = load_json_asset("bedwars_chat.json")["kill_messages"]
 
-GAME_START_MESSAGE_SETS = [  # block all the game start messages
-    [
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-        "                                  Bed Wars",
-        "     Protect your bed and destroy the enemy beds.",
-        "      Upgrade yourself and your team by collecting",
-        "    Iron, Gold, Emerald and Diamond from generators",
-        "                  to access powerful upgrades.",
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-    ],
-    #
-    # no armed
-    #
-    [
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-        "                       Bed Wars Lucky Blocks",
-        "    Collect Lucky Blocks from resource generators",
-        "       to receive random loot! Break them to reveal",
-        "                             their contents!",
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-    ],
-    [
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-        "                              Bed Wars Rush",
-        "     All generators are maxed! Your bed has three",
-        "       layers of protection! Left click while holding",
-        "                 wool to activate bridge building!",
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-    ],
-    [
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-        "                           Bed Wars Ultimate",
-        "          Select an ultimate in the store! They will",
-        "                     be enabled in 10 seconds!",
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-    ],
-    #
-    # no voidless
-    #
-    [
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-        "                          Bed Wars Swappage",
-        "    Players swap teams at random intervals! Players",
-        "        also swap positions with the players of the",
-        "                    team they are swapping to!",
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-    ],
-    [
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-        "                                  Bed Wars",
-        "     Every few seconds brings a new surprise! Use",
-        "        these items to defend your bed or destroy",
-        "                                enemy beds.",
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-    ],
-    [
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-        "                             Bed Wars Duels",
-        "      Protect your bed and destroy the enemy bed.",
-        "         Upgrade yourself by collecting Iron, Gold,",
-        "    Emerald and Diamond from generators to access",
-        "                          powerful upgrades.",
-        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-    ],
+# block all the game start messages
+GAME_START_MESSAGE_SETS: list[list[str]] = load_json_asset("bedwars_chat.json")[
+    "game_start_message_sets"
 ]
 GAME_START_MESSAGES = [msg for msg_set in GAME_START_MESSAGE_SETS for msg in msg_set]
 
@@ -993,6 +932,7 @@ class StatCheckPlugin:
         message = buff.unpack(Chat)
 
         if message in {msg_set[-2] for msg_set in GAME_START_MESSAGE_SETS}:  # runs once
+            self.logger.debug(f"detected game start from {message!r}")
             self.create_task(self.highlight_adjacent_teams())
             self.upstream.chat("/who")
             self.received_who.clear()
