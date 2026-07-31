@@ -153,6 +153,7 @@ class StatCheckPlugin:
 
         self.player_stats_task = self.create_task(self._update_stats())
 
+    # wet ahh code
     @property
     def respawning(self: ProxhyPlugin) -> dict[str, GamePlayer]:
         return {
@@ -170,13 +171,21 @@ class StatCheckPlugin:
         }
 
     @property
+    def disconnected(self: ProxhyPlugin) -> dict[str, GamePlayer]:
+        return {
+            player.username: player
+            for player in self.game_players.values()
+            if player.status == GamePlayerStatus.DISCONNECTED
+        }
+
+    @property
     def all_players(self: ProxhyPlugin) -> set[str]:
         all_players = self.real_players()
 
         if self.settings.bedwars.tablist.show_eliminated_players.get() == "ON":
             all_players |= set(self.eliminated.keys())
         if self.settings.bedwars.tablist.show_respawn_timer.get() == "ON":
-            all_players |= set(self.respawning.keys())
+            all_players |= set(self.respawning.keys()) | set(self.disconnected.keys())
 
         return all_players
 
@@ -238,6 +247,9 @@ class StatCheckPlugin:
     def _get_respawning_display_name(self: ProxhyPlugin, player: GamePlayer) -> str:
         return f"§6§l{player.respawn_time}s {self._get_dead_display_name(player)}"
 
+    def _get_disconnected_display_name(self: ProxhyPlugin, player: GamePlayer) -> str:
+        return f"§6§lD {self._get_dead_display_name(player)}"
+
     def _remove_display_names(self: ProxhyPlugin, players: Collection[GamePlayer]):
         self.downstream.send_packet(
             0x38,
@@ -292,6 +304,13 @@ class StatCheckPlugin:
                 {
                     player.offline_uuid: self._get_respawning_display_name(player)
                     for player in self.respawning.values()
+                }
+            )
+            # disconnected players
+            self._send_tablist_update(
+                {
+                    player.offline_uuid: self._get_disconnected_display_name(player)
+                    for player in self.disconnected.values()
                 }
             )
 
@@ -465,6 +484,7 @@ class StatCheckPlugin:
                 if player.status in {
                     GamePlayerStatus.ELIMINATED,
                     GamePlayerStatus.RESPAWNING,
+                    GamePlayerStatus.DISCONNECTED,
                 }:
                     self._send_tablist_update(
                         {player.offline_uuid: self._get_dead_display_name(player)}
@@ -1162,6 +1182,31 @@ class StatCheckPlugin:
         gplayer = self.game_players[username]
 
         if message.endswith("disconnected."):
+            gplayer.status = GamePlayerStatus.DISCONNECTED
+
+            if gplayer.respawn_timer_task is not None:
+                gplayer.respawn_timer_task.cancel()
+
+            if self.settings.bedwars.tablist.show_respawn_timer.get() == "ON":
+                if gplayer.username == self.nick_or_username:
+                    self.downstream.send_packet(
+                        0x38,
+                        VarInt.pack(4),
+                        VarInt.pack(1),
+                        UUID.pack(gplayer.uuid),
+                    )
+                self.downstream.send_packet(
+                    0x38,
+                    VarInt.pack(0),  # spawn player
+                    VarInt.pack(1),  # number of players
+                    UUID.pack(gplayer.offline_uuid),
+                    String.pack(gplayer.username),
+                    VarInt.pack(0),
+                    VarInt.pack(3),  # gamemode; spectator
+                    VarInt.pack(0),  # ping
+                    Boolean.pack(True),
+                    Chat.pack(self._get_disconnected_display_name(gplayer)),
+                )
             return
 
         if fk:

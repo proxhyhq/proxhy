@@ -77,6 +77,7 @@ class GamePlayerStatus(StrEnum):
     ALIVE = auto()
     RESPAWNING = auto()
     ELIMINATED = auto()
+    DISCONNECTED = auto()
 
 
 @dataclass
