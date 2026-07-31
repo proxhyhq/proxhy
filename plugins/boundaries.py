@@ -67,6 +67,10 @@ class BoundariesPlugin:
         self.placed_mappings: deque[int] = deque(maxlen=10)
         self.boundary_regions: list[BoundaryRegion] = []
 
+        # team name -> whether that base is a mirror image of the learned
+        # boundary box (resolved from terrain by BoundaryRegion)
+        self.base_parity: dict[str, bool] = {}
+
         # developer flag to enable features that make it
         # easier to get the boundary positions on new maps
         self.log_boundaries = True
@@ -120,6 +124,11 @@ class BoundariesPlugin:
         self.entities_teleported = {}
         self.team_spawnpoints = {}
 
+        # clear stale regions from the previous game; their world coordinates
+        # are meaningless on the new map
+        self.boundary_regions = []
+        self.base_parity = {}
+
         self.last_game_start = time.time()
         self.teams_populated = False
 
@@ -148,7 +157,7 @@ class BoundariesPlugin:
             self.n_total_boundaries = (
                 len(self.map_data["generators"]["emerald"])
                 + len(self.map_data["generators"]["diamond"])
-                + len(self.map_data.get("spawnpoints"))
+                + len(self.map_data.get("spawnpoints") or {})
             )
             self.initialize_all_boundaries()
 
@@ -226,13 +235,29 @@ class BoundariesPlugin:
             self.logger.warning(
                 "Already initialized some boundaries! May re-initialize existing ones by mistake."
             )
-        for c in boundary_corners:
+        for c1, c2, alt_corners, team in boundary_corners:
             self.boundary_regions.append(
-                BoundaryRegion(c[0], c[1], self.gamestate, self.logger)
+                BoundaryRegion(
+                    c1,
+                    c2,
+                    self.gamestate,
+                    self.logger,
+                    alt_corners=alt_corners,
+                    team=team,
+                )
             )
 
-    def _collect_all_boundary_corners(self: ProxhyPlugin) -> list[tuple[Pos, Pos]]:
-        """Collects boundary corners from bedwars_maps.json for bases and generators."""
+    def _collect_all_boundary_corners(
+        self: ProxhyPlugin,
+    ) -> list[tuple[Pos, Pos, tuple[Pos, Pos] | None, str | None]]:
+        """
+        Collects boundary corners from bedwars_maps.json for bases and generators.
+            Returns:
+                a list of (corner1, corner2, alt_corners, team) tuples.
+                alt_corners is the mirror-image candidate box for bases whose
+                learned boundary is laterally asymmetric (see BoundaryRegion),
+                or None; team is the team name for bases, None for generators.
+        """
         # diamond and emerald generators are a 7x7x7 cube
         # saved coordinate in file is at the top & center block
         emerald_centers = self.map_data["generators"]["emerald"]
@@ -241,15 +266,14 @@ class BoundariesPlugin:
         gen_centers: list[list[float]]
         gen_centers = emerald_centers + diamond_centers
 
-        boundary_corners: list[tuple[Pos, Pos]] = []
+        boundary_corners: list[tuple[Pos, Pos, tuple[Pos, Pos] | None, str | None]] = []
         for c in gen_centers:
             x, y, z = math.floor(c[0]), math.floor(c[1]), math.floor(c[2])
             corner1 = Pos(x + 3, y, z + 3)
             corner2 = Pos(x - 3, y - 6, z - 3)
-            boundary_corners.append((corner1, corner2))
+            boundary_corners.append((corner1, corner2, None, None))
 
-        spawnpoints: list[list[float]]
-        spawnpoints = self.map_data["spawnpoints"].values()
+        spawnpoints: dict[str, list[float]] = self.map_data["spawnpoints"]
         boundary_data: None | dict[str, list[int]] = self.map_data.get("boundary")
         if boundary_data is not None:
             rel_corner1 = Pos(
@@ -262,24 +286,76 @@ class BoundariesPlugin:
                 boundary_data["corner2"][1],
                 boundary_data["corner2"][2],
             )
-            for s in spawnpoints:
+
+            # bases come in mirror-image pairs, which a yaw-only transform
+            # cannot distinguish: a laterally (local x) asymmetric learned
+            # box fits one parity and is reflected on the other. build the
+            # mirrored candidate too; BoundaryRegion picks the parity that
+            # matches the terrain once chunks are loaded.
+            mirrored_rel_corner1 = Pos(-rel_corner1.x, rel_corner1.y, rel_corner1.z)
+            mirrored_rel_corner2 = Pos(-rel_corner2.x, rel_corner2.y, rel_corner2.z)
+            # if the box is laterally symmetric the mirror is the same box
+            is_symmetric = rel_corner1.x == -rel_corner2.x
+
+            for team, s in spawnpoints.items():
                 spawn_x, spawn_y, spawn_z, spawn_yaw = (
                     math.floor(s[0]),
                     math.floor(s[1]),
                     math.floor(s[2]),
                     s[3],
                 )
-                yaw_int = int(spawn_yaw)
-                yaw = self.validate_yaw(yaw_int)
-                if yaw:
-                    c1 = self.get_global_pos_yaw(
-                        rel_corner1, Pos(spawn_x, spawn_y, spawn_z), yaw
-                    )
-                    c2 = self.get_global_pos_yaw(
-                        rel_corner2, Pos(spawn_x, spawn_y, spawn_z), yaw
-                    )
-                    boundary_corners.append((c1, c2))
+                # the captured yaw is the look direction of whichever player
+                # happened to be teleported there and is unreliable; derive
+                # the base's facing from map geometry, falling back to the
+                # captured yaw only when derivation is ambiguous
+                yaw = self.derive_base_yaw(s[0], s[2])
+                if yaw is None:
+                    yaw = self.validate_yaw(int(spawn_yaw))
+                # NOTE: yaw == 0 is a valid orientation; only None is invalid
+                if yaw is not None:
+                    anchor = Pos(spawn_x, spawn_y, spawn_z)
+                    c1 = self.get_global_pos_yaw(rel_corner1, anchor, yaw)
+                    c2 = self.get_global_pos_yaw(rel_corner2, anchor, yaw)
+
+                    alt: tuple[Pos, Pos] | None = None
+                    if not is_symmetric:
+                        alt = (
+                            self.get_global_pos_yaw(mirrored_rel_corner1, anchor, yaw),
+                            self.get_global_pos_yaw(mirrored_rel_corner2, anchor, yaw),
+                        )
+                    boundary_corners.append((c1, c2, alt, team))
         return boundary_corners
+
+    def derive_base_yaw(
+        self: ProxhyPlugin, spawn_x: float, spawn_z: float
+    ) -> Literal[0, 90, -90, 180, -180] | None:
+        """
+        Derives a base's facing from map geometry: bases face the map
+        interior, approximated by the centroid of all known spawnpoints.
+
+        The yaw captured from teleport packets is the look direction of the
+        teleported player, who can be looking anywhere while frozen at
+        spawn, so it cannot be trusted for box orientation.
+            Returns:
+                the snapped yaw, or None if it cannot be derived (fewer than
+                two spawnpoints, or the base sits diagonal to the centroid).
+        """
+        spawnpoints: dict[str, list[float]] | None = self.map_data.get("spawnpoints")
+        if not spawnpoints or len(spawnpoints) < 2:
+            return None
+
+        center_x = sum(s[0] for s in spawnpoints.values()) / len(spawnpoints)
+        center_z = sum(s[2] for s in spawnpoints.values()) / len(spawnpoints)
+
+        dx = center_x - spawn_x
+        dz = center_z - spawn_z
+        if abs(dx) == abs(dz):
+            # ambiguous (diagonally-facing base); let the caller fall back
+            return None
+        if abs(dz) > abs(dx):
+            return 0 if dz > 0 else -180
+        else:
+            return 90 if dx < 0 else -90
 
     def validate_yaw(
         self: ProxhyPlugin, yaw: int | float, snap=True
@@ -532,17 +608,46 @@ class BoundariesPlugin:
         if min_dist > max_dist:
             return
 
+        # events already inside a constructed boundary region need no
+        # learning. this also covers the world +z pad row and mirror parity,
+        # which the local box below cannot express — without this check,
+        # events there would wrongly re-expand the saved boundary each game
+        for r in self.boundary_regions:
+            if (
+                min(r.c1.x, r.c2.x) <= pos.x <= max(r.c1.x, r.c2.x)
+                and min(r.c1.y, r.c2.y) <= pos.y <= max(r.c1.y, r.c2.y)
+                and min(r.c1.z, r.c2.z) <= pos.z <= max(r.c1.z, r.c2.z)
+            ):
+                return
+
         # check if the block deleted is already inside the known region
-        spawn_x = int(self.map_data["spawnpoints"][closest_team][0])
-        spawn_y = int(self.map_data["spawnpoints"][closest_team][1])
-        spawn_z = int(self.map_data["spawnpoints"][closest_team][2])
-        yaw = self.validate_yaw(self.map_data["spawnpoints"][closest_team][3])
+        # NOTE: floor, not int() — int() truncates toward zero, which is off
+        # by one for negative spawn coordinates (int(-76.5) == -76, but the
+        # spawn block is -77) and corrupts learned extents at those bases
+        spawn_x = math.floor(self.map_data["spawnpoints"][closest_team][0])
+        spawn_y = math.floor(self.map_data["spawnpoints"][closest_team][1])
+        spawn_z = math.floor(self.map_data["spawnpoints"][closest_team][2])
+        # derive facing from geometry; captured look yaws are unreliable and
+        # a wrong yaw here maps events into the wrong local axes, corrupting
+        # the saved boundary
+        yaw = self.derive_base_yaw(
+            self.map_data["spawnpoints"][closest_team][0],
+            self.map_data["spawnpoints"][closest_team][2],
+        )
+        if yaw is None:
+            yaw = self.validate_yaw(self.map_data["spawnpoints"][closest_team][3])
         if yaw is not None:
             rel_pos = self.get_relative_pos_yaw(
                 pos, Pos(spawn_x, spawn_y, spawn_z), yaw
             )
         else:
             return
+
+        # mirrored bases are lateral reflections of the canonical box; store
+        # learned expansions in the canonical frame so the saved boundary
+        # doesn't get smeared laterally by mirror-image bases
+        if self.base_parity.get(closest_team):
+            rel_pos = Pos(-rel_pos.x, rel_pos.y, rel_pos.z)
 
         bc1x, bc1y, bc1z = (
             self.boundary_corner_1.x,
@@ -732,7 +837,7 @@ class BoundariesPlugin:
                 .color("yellow")
                 .append(TextComponent(" -> "))
                 .color("white")
-                .append(TextComponent(({corner2[0]}, {corner2[1]}, {corner2[2]})))
+                .append(TextComponent(f"({corner2[0]}, {corner2[1]}, {corner2[2]})"))
                 .color("yellow")
             )
             self.downstream.chat(
@@ -860,9 +965,10 @@ class BoundariesPlugin:
                 not self.game.started
                 or self.game.gametype != "bedwars"
                 or not hasattr(self, "map_data")
-                or len(self.boundary_regions) == self.n_total_boundaries
             ):
                 continue
+            # note: no early-out when all regions are initialized; this call
+            # also handles render/cull checks as the player moves around
             await self.check_loaded_boundaries()
 
     # TODO: move this to another file?
@@ -893,6 +999,11 @@ class BoundariesPlugin:
 
             # might be laggy but this is in a non-blocking task
             await asyncio.to_thread(r.initialize_segments)
+
+            # record base mirror parity so the boundary learning pipeline
+            # can store events from mirrored bases in the canonical frame
+            if r.team is not None:
+                self.base_parity[r.team] = r.mirrored
 
         # check if any boundaries are close enough to render them
         player_position = (
@@ -933,13 +1044,23 @@ class BoundariesPlugin:
                 s.z + offset[2] + 0.5,
             )
             is_corner = s.corner != SegmentCorner.NOT_CORNER
-            await self.place_boundary_segment(position, is_corner, rot)
+            entity_id = await self.place_boundary_segment(position, is_corner, rot)
+            region.entity_ids.append(entity_id)
 
         region.displayed = True
 
-    async def unrender_boundary(self, region: BoundaryRegion):
+    async def unrender_boundary(self: ProxhyPlugin, region: BoundaryRegion):
         """Removes all segments in a given rendered boundary region in the world."""
-        pass
+        if region.entity_ids:
+            # destroy entities packet
+            self.downstream.send_packet(
+                0x13,
+                VarInt.pack(len(region.entity_ids)),
+                *(VarInt.pack(eid) for eid in region.entity_ids),
+            )
+            region.entity_ids.clear()
+
+        region.displayed = False
 
     def _get_segment_rotation_and_offsets(
         self: ProxhyPlugin, s: BoundarySegment
@@ -1039,6 +1160,16 @@ class BoundariesPlugin:
         yaw = get_yaw()
         roll = get_roll()
 
+        # roll rotates about the entity's z axis (world z), which for Z-face
+        # wall markers (yaw 0/180) coincides with the marker's view axis and
+        # correctly flips the line texture to the opposite edge. for X-face
+        # markers (yaw 90/270) that axis is IN the texture plane: roll=180
+        # only mirrors the marker's position and can never flip the line's
+        # horizontal edge. the equivalent pose that does — a 180° rotation
+        # about the world x axis — is pitch 270 with yaw flipped, roll 0.
+        if roll == 180 and yaw in (90, 270):
+            pitch, yaw, roll = 270, (yaw + 180) % 360, 0
+
         # OFFSET_LOOKUP = {
         #     (0, 0, 0): (0, -1.75, 0),
         #     (0, 90, 0): (0, -1.75, 0),
@@ -1054,6 +1185,11 @@ class BoundariesPlugin:
         #     (90, 270, 180): (-0.3, -1.43, 0),
         # }
 
+        # roll=180 about world z leaves yaw 0/180 marker positions unchanged
+        # (their displacement lies on the roll axis), so those rows share the
+        # roll=0 offsets. the pitch 270 rows are the world-x-flipped poses for
+        # X-face markers; their positions match the roll=0 marker of the same
+        # face (yaw flipped), so they share those offsets.
         OFFSET_LOOKUP = {
             (0, 0, 0): (0, -1.75, 0),
             (0, 90, 0): (0, -1.75, 0),
@@ -1064,9 +1200,9 @@ class BoundariesPlugin:
             (90, 180, 0): (0, -1.43, -0.68),
             (90, 270, 0): (0.68, -1.43, 0),
             (90, 0, 180): (0, -1.43, 0.68),
-            (90, 90, 180): (-0.68, -1.43, 0),
             (90, 180, 180): (0, -1.43, -0.68),
-            (90, 270, 180): (0.68, -1.43, 0),
+            (270, 90, 0): (0.68, -1.43, 0),
+            (270, 270, 0): (-0.68, -1.43, 0),
         }
 
         offsets = OFFSET_LOOKUP.get((pitch, yaw, roll))
@@ -1098,7 +1234,8 @@ class BoundariesPlugin:
         pos: tuple[float, float, float],
         is_corner: bool,
         rot: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    ):
+    ) -> int:
+        """Spawns a single boundary marker; returns its (negative) entity ID."""
         # good edge case test maps for final boundary implementation:
         #   - apollo
 
@@ -1152,6 +1289,8 @@ class BoundariesPlugin:
             Short.pack(metadata),  # Item Damage/Metadata: 0/1 (stone/cobblestone)
             UnsignedByte.pack(0),  # NBT Terminator (Empty NBT compound)
         )
+
+        return entity_id
 
 
 class BlockType(Enum):
@@ -1345,9 +1484,37 @@ class BoundaryChain:
 
 class BoundaryRegion:
     def __init__(
-        self, c1: Pos, c2: Pos, gamestate: GameState, logger: logging.LoggerAdapter
+        self,
+        c1: Pos,
+        c2: Pos,
+        gamestate: GameState,
+        logger: logging.LoggerAdapter,
+        alt_corners: tuple[Pos, Pos] | None = None,
+        team: str | None = None,
     ):
         """Positions should be global positions in world, not local boundary boxes."""
+        self._set_corners(c1, c2)
+
+        # mirror-image candidate box (for bases with a laterally asymmetric
+        # learned boundary); resolved against terrain in initialize_segments
+        self.alt_corners = alt_corners
+        self.team = team
+        self.mirrored: bool = False
+
+        # gamestate is necessary to query blocks at a location
+        self.gamestate = gamestate
+        self.logger = logger
+
+        # this shouldn't take too long, but just to be safe, don't interrupt the packet stream
+        self.initialized_segments: bool = False
+        self.displayed: bool = False
+        self.segments: list[BoundarySegment] = []
+
+        # entity IDs of the armor stands currently rendered for this region,
+        # so they can be despawned when the region is culled
+        self.entity_ids: list[int] = []
+
+    def _set_corners(self, c1: Pos, c2: Pos) -> None:
         # a boundary region has a node at each corner of cuboid; 8 total
         self.c1 = c1
         self.c2 = c2
@@ -1362,15 +1529,6 @@ class BoundaryRegion:
             Pos(c2.x, c2.y, c1.z),
             Pos(c2.x, c2.y, c2.z),
         )
-
-        # gamestate is necessary to query blocks at a location
-        self.gamestate = gamestate
-        self.logger = logger
-
-        # this shouldn't take too long, but just to be safe, don't interrupt the packet stream
-        self.initialized_segments: bool = False
-        self.displayed: bool = False
-        self.segments: list[BoundarySegment] = []
 
     def __iter__(self):
         yield from self.segments
@@ -1393,12 +1551,51 @@ class BoundaryRegion:
 
     def initialize_segments(self):
         print("Initializing segments...")
+        if self.alt_corners is not None:
+            self._resolve_mirror_parity()
         chains = self.compute_boundary_segments()
         self.segments = [
             segment for boundary_chain in chains for segment in boundary_chain
         ]
         self.initialized_segments = True
         print(f"Finished initializing segments with {len(self.segments)} segments.")
+
+    def _count_solid_blocks(self, c1: Pos, c2: Pos) -> int:
+        """Counts non-air loaded blocks inside the given cuboid (inclusive)."""
+        solid = 0
+        for x in range(min(c1.x, c2.x), max(c1.x, c2.x) + 1):
+            for z in range(min(c1.z, c2.z), max(c1.z, c2.z) + 1):
+                for y in range(min(c1.y, c2.y), max(c1.y, c2.y) + 1):
+                    if self.gamestate.get_block(x, y, z) > 0:
+                        solid += 1
+        return solid
+
+    def _resolve_mirror_parity(self) -> None:
+        """
+        Picks between the learned box and its mirror image for this base.
+
+        Bases come in mirror-image (chiral) pairs; the learned asymmetric
+        boundary box fits one parity and must be laterally reflected for the
+        other, which a yaw-only transform cannot express. The base structure
+        itself is the tiebreaker: the correct box encloses the denser side
+        (towers/walls), so pick the candidate containing more solid blocks.
+        """
+        if self.alt_corners is None:
+            return
+        alt_c1, alt_c2 = self.alt_corners
+
+        primary_solid = self._count_solid_blocks(self.c1, self.c2)
+        mirrored_solid = self._count_solid_blocks(alt_c1, alt_c2)
+
+        if mirrored_solid > primary_solid:
+            self.mirrored = True
+            self._set_corners(alt_c1, alt_c2)
+
+        self.logger.info(
+            f"Boundary parity for {self.team or 'unknown team'}: "
+            f"mirrored={self.mirrored} "
+            f"(solid blocks: primary={primary_solid}, mirrored={mirrored_solid})"
+        )
 
     def compute_boundary_segments(self) -> list[BoundaryChain]:
         min_x_face = [0, 1, 2, 3]
@@ -1419,8 +1616,140 @@ class BoundaryRegion:
             unmerged_chains.extend(v)
         merged_chains = self._merge_chains(unmerged_chains)
         continuous_chains = [self._make_chain_continuous(c) for c in merged_chains]
+        connected_chains = self._connect_vertical_runs(continuous_chains)
+        closed_chains = [self._close_ring(c) for c in connected_chains]
 
-        return continuous_chains
+        return closed_chains
+
+    def _connect_vertical_runs(
+        self, chains: list[BoundaryChain]
+    ) -> list[BoundaryChain]:
+        """
+        Joins chains whose endpoints are separated by a flat vertical wall
+        taller than one block using a straight stack of wall segments.
+
+        Chain linking only connects segments within one block of elevation,
+        so a taller cliff splits the outline into separate chains with a
+        visual gap. When the wall between two such endpoints is flat and
+        uninterrupted (air in the marker column and full solid blocks in the
+        wall column at every level), a stacked run of vertical wall segments
+        bridges it; anything else (holes, slabs, side-steps) is left as-is.
+        """
+        connected = True
+        while connected:
+            connected = False
+            for i, chain in enumerate(chains):
+                for j, other in enumerate(chains):
+                    if i == j:
+                        continue
+                    # try tail->head, tail->tail, head->head, head->tail;
+                    # the splice is always tail-of-chain -> head-of-other
+                    # once the necessary reversals are applied
+                    for chain_end, other_end in ((-1, 0), (-1, -1), (0, 0), (0, -1)):
+                        run = self._build_vertical_run(
+                            chain[chain_end], other[other_end]
+                        )
+                        if run is None:
+                            continue
+                        if chain_end == 0:
+                            chain.reverse()
+                        if other_end == -1:
+                            other.reverse()
+                        merged = chain + run + other
+                        chains = [c for k, c in enumerate(chains) if k not in (i, j)]
+                        chains.append(merged)
+                        connected = True
+                        break
+                    if connected:
+                        break
+                if connected:
+                    break
+        return chains
+
+    def _build_vertical_run(
+        self, a: BoundarySegment, b: BoundarySegment
+    ) -> list[BoundarySegment] | None:
+        """
+        Returns the stack of wall segments bridging endpoint a to endpoint b,
+        ordered from a to b, or None if the endpoints don't sit across a
+        straight, flat, uninterrupted vertical wall.
+        """
+        if a.direction != b.direction or a.direction not in (
+            SegmentDirection.X,
+            SegmentDirection.Z,
+        ):
+            return None
+        if a.side != b.side or a.side == SegmentSide.CORNER:
+            return None
+        if abs(a.y - b.y) < 2:
+            # single-block steps are already handled by _make_chain_continuous
+            return None
+        if a.direction == SegmentDirection.X:
+            if a.z != b.z or abs(a.x - b.x) != 1:
+                return None
+        else:
+            if a.x != b.x or abs(a.z - b.z) != 1:
+                return None
+
+        lower, higher = (a, b) if a.y < b.y else (b, a)
+
+        # the wall is the higher column's side (see _get_vertical_connector)
+        if a.direction == SegmentDirection.X:
+            if lower.x - higher.x > 0:
+                face = BlockFace.POS_X
+            else:
+                face = BlockFace.NEG_X
+        else:
+            if lower.z - higher.z > 0:
+                face = BlockFace.POS_Z
+            else:
+                face = BlockFace.NEG_Z
+
+        # flat & uninterrupted: air in the marker column and full solid
+        # blocks in the wall column at every level of the run
+        for y in range(lower.y, higher.y):
+            if self._analyze_block(lower.x, y, lower.z).get("type") != BlockType.AIR:
+                return None
+            if (
+                self._analyze_block(higher.x, y, higher.z).get("type")
+                != BlockType.SOLID
+            ):
+                return None
+
+        run = [
+            BoundarySegment(
+                lower.x, y, lower.z, a.direction, a.side, lower.type, block_face=face
+            )
+            for y in range(lower.y, higher.y)
+        ]
+        if a is higher:
+            run.reverse()
+        return run
+
+    def _close_ring(self, chain: BoundaryChain) -> BoundaryChain:
+        """
+        Closes a fully merged perimeter loop.
+
+        _merge_chains can never merge a chain with itself, so a closed ring
+        ends up with its head and tail as two separate edge segments at the
+        same corner block (visible as z-fighting at one corner). Fuse those
+        duplicated endpoints into the proper corner segment. Both endpoints
+        share the exact same position, so any vertical connectors were
+        already placed correctly by _make_chain_continuous.
+        """
+        if len(chain) >= 2 and chain[0].pos_eq_other(chain[-1]):
+            try:
+                corner = self._merge_corner(chain[0], chain[-1])
+            except ValueError:
+                self.logger.warning(
+                    f"Could not close boundary ring at "
+                    f"({chain[0].x}, {chain[0].y}, {chain[0].z})"
+                )
+                return chain
+            chain.popleft()
+            chain.pop()
+            chain.appendleft(corner)
+        return chain
 
     def _make_chain_continuous(self, chain: BoundaryChain) -> BoundaryChain:
         """

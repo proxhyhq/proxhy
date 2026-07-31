@@ -102,6 +102,8 @@ def _dump_boundary_region(region: BoundaryRegion) -> dict:
     return {
         "c1": {"x": region.c1.x, "y": region.c1.y, "z": region.c1.z},
         "c2": {"x": region.c2.x, "y": region.c2.y, "z": region.c2.z},
+        "team": getattr(region, "team", None),
+        "mirrored": getattr(region, "mirrored", None),
         "initialized_segments": region.initialized_segments,
         "displayed": region.displayed,
         "segment_count": len(region.segments),
@@ -232,6 +234,7 @@ class DebugPlugin:
             },
             "n_total_boundaries": self.n_total_boundaries,
             "n_initialized_boundary_regions": len(self.boundary_regions),
+            "base_parity": getattr(self, "base_parity", None),
             "team_spawnpoints": self.team_spawnpoints,
             "entities_teleported": self.entities_teleported,
             "recently_placed": [
