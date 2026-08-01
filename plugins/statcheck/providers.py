@@ -494,18 +494,19 @@ def _field_provider(key: str) -> type[Provider]:
 _migrated_legacy_api_key = False
 
 
+_shared_providers: dict[_LowerRegisteredProvider_T, Provider] = {}
+
+for provider_name, provider in REGISTERED_PROVIDERS.items():
+    if provider is not HypixelProvider and provider_name not in _shared_providers:
+        _shared_providers[provider_name] = provider.setup()
+
+
 class ProviderPlugin:
     def _init_providers(self: ProxhyPlugin):
         global _migrated_legacy_api_key  # ):
 
-        self.active_providers: dict[_LowerRegisteredProvider_T, Provider] = {}
-        self.provided_fields: list[str] = []
-
-        for provider_name, provider in REGISTERED_PROVIDERS.items():
-            if provider is not HypixelProvider:
-                self.active_providers[provider_name] = provider.setup()
-
-        self.provided_fields = [
+        self.active_providers = _shared_providers.copy()
+        self.provided_fields: list[str] = [
             GamePlayer.field_name(key) for key in _PROVIDER_FIELD_MAP
         ]
 
