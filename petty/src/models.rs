@@ -750,6 +750,10 @@ impl TextComponent {
     pub fn click_event(
         slf: PyRefMut<'_, Self>,
         py: Python<'_>,
+        #[gen_stub(override_type(
+            type_repr = "models.ClickEvent_T",
+            imports = ("petty.models")
+        ))]
         action: String,
         value: String,
     ) -> PyResult<Py<TextComponent>> {
