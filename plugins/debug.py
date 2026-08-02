@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from petty.protocol.datatypes import TextComponent
+from petty.models import TextComponent
 
 from plugins.commands import command
 

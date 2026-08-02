@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import hypixel
 import orjson
 from petty.events import subscribe
-from petty.protocol.datatypes import TextComponent
+from petty.models import TextComponent
 
 from plugins.commands import CommandContext, CommandException, Lazy, command
 from proxhy.argtypes import Gamemode, HypixelPlayer, Statistic

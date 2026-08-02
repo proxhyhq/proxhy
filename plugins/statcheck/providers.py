@@ -13,7 +13,7 @@ import hypixel
 import keyring
 import seraph
 from petty.events import subscribe
-from petty.protocol.datatypes import TextComponent
+from petty.models import TextComponent
 
 from plugins.commands import command
 from plugins.statcheck.models import (

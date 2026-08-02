@@ -3,7 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from petty.protocol.datatypes import TextComponent
+from petty.models import TextComponent
 from platformdirs import user_config_dir
 
 from plugins.commands import CommandGroup

@@ -13,7 +13,7 @@ from typing import (
     get_type_hints,
 )
 
-from petty.protocol.datatypes import TextComponent
+from petty.models import TextComponent
 
 from proxhy.errors import ProxhyException
 
