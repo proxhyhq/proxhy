@@ -1,4 +1,5 @@
 import asyncio
+import re
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
@@ -12,14 +13,17 @@ import hypixel
 import keyring
 import seraph
 from petty.events import subscribe
+from petty.protocol.datatypes import TextComponent
 
+from plugins.commands import command
 from plugins.statcheck.models import (
     BedWarsTeam,
     GamePlayerStatus,
     Nick,
 )
+from proxhy.argtypes import MojangPlayer
 from proxhy.secrets import delete_secret, get_secret, set_secret
-from proxhy.utils import nearest_mc_color, offline_uuid
+from proxhy.utils import offline_uuid, readable_time, relative_time
 from proxhypixel.formatting import format_player_dict
 
 if TYPE_CHECKING:
@@ -371,7 +375,50 @@ class HypixelProvider(Provider[hypixel.Client, Nick | dict[str, str | float | in
                 return None
 
 
-class SeraphProvider(Provider[seraph.Seraph, seraph.CubelifyResponse]):
+@dataclass
+class _GamePlayerTag:
+    source: RegisteredProvider_T
+    category: str  # e.g. Blatant Cheater
+    cheats: Iterable[str]
+    author: str | None
+    timestamp: int  # utc; ms
+
+
+seraph_pattern = re.compile(
+    r"^(?:(?P<category>[^:\[]+):\s*)?"
+    r"(?:\[(?P<unknown>[^\]]+)\]:\s*)?"
+    r"(?P<cheats>[^(]*?)\s*"
+    r"(?:\(\s*(?P<upgraded>Upgraded)\s*\))?\s*"
+    r"(?:\(\s*(?P<time>.+?)\s+ago\s+by\s+(?P<author>.+?)\s*\))?\s*$"
+)
+
+
+@dataclass
+class SeraphMatch:
+    category: str | None
+    unknown: str | None
+    cheats: tuple[str]
+    upgraded: bool
+    author: str | None
+
+
+def parse_seraph_tooltip(tooltip: str) -> SeraphMatch | None:
+    # e.g. "Blatant Cheating: [seraphac]: legit, scaffold ( Upgraded ) ( 4 months ago by lvlw* ) "
+    m = seraph_pattern.match(tooltip)
+    if m is None:
+        return None
+
+    d = m.groupdict()
+    return SeraphMatch(
+        category=d["category"],
+        unknown=d["unknown"],
+        cheats=tuple(c.strip() for c in d["cheats"].split(",")) if d["cheats"] else (),  # type: ignore
+        upgraded=d["upgraded"] is not None,
+        author=d["author"],
+    )
+
+
+class SeraphProvider(Provider[seraph.Seraph, seraph.BlacklistData]):
     _fields = {"seraph_tag": "Seraph Tag"}
     max_retries = 1
 
@@ -395,32 +442,47 @@ class SeraphProvider(Provider[seraph.Seraph, seraph.CubelifyResponse]):
 
     async def _fetch(
         self, player: GamePlayer
-    ) -> tuple[FetchOutcome, seraph.CubelifyResponse | None, str]:
+    ) -> tuple[FetchOutcome, seraph.BlacklistData | None, str]:
         try:
-            data = await self._client.cubelify_blacklist(str(player.uuid))
+            data = await self._client.blacklist(str(player.uuid))
         except Exception as exc:  # TODO: narrow
             return FetchOutcome.TRANSIENT, None, str(exc)
-        return FetchOutcome.OK, data, ""
+        else:
+            if not data.success:
+                # TODO: fix?
+                return FetchOutcome.TRANSIENT, None, str(data.code)
+        return FetchOutcome.OK, data.data, ""
 
     @classmethod
     def extract(
-        cls, player: GamePlayer, data: seraph.CubelifyResponse | None, key: str
+        cls, player: GamePlayer, data: seraph.BlacklistData | None, key: str
     ) -> str | None:
-        if data is None:
+        if data is None or data.blacklist is None:
             return None
 
+        _color_map: dict[str, str] = {
+            "Sniping": "§e",  # yellow
+            "Closet Cheating": "§c",  # red
+            "Blatant Cheating": "§4",  # dark_red
+        }
+
         if key == "seraph_tag":
-            tag_texts = [
-                nearest_mc_color(tag.color) + tag.text for tag in data.tags if tag.text
-            ]
-            if not tag_texts:
-                return None
-            return f"§dS:{'§f/'.join(tag_texts)}"  # TODO: make better?
+            # TODO: can seraph have multiple tags?
+            if (
+                data.blacklist.tagged
+                and (tagdata := parse_seraph_tooltip(data.blacklist.tooltip))
+                is not None
+            ):
+                tag = _color_map.get(tagdata.category or "Tagged", "§d") + "".join(
+                    # e.g. "Blatant Cheating" => "BC"
+                    filter(str.isupper, tagdata.category or "Tagged")
+                )
+                return f"§6S:{tag}"
 
         return None
 
 
-class CoralProvider(Provider[coral.Coral, coral.CubelifyResponse]):
+class CoralProvider(Provider[coral.Coral, coral.PlayerTagsResponse]):
     _fields = {"coral_tag": "Coral Tag"}
     max_retries = 1
 
@@ -437,27 +499,40 @@ class CoralProvider(Provider[coral.Coral, coral.CubelifyResponse]):
 
     async def _fetch(
         self, player: GamePlayer
-    ) -> tuple[FetchOutcome, coral.CubelifyResponse | None, str]:
+    ) -> tuple[FetchOutcome, coral.PlayerTagsResponse | None, str]:
         try:
-            data = await self._client.cubelify(str(player.uuid))
+            data = await self._client.player_tags(str(player.uuid))
         except Exception as exc:  # TODO: narrow
             return FetchOutcome.TRANSIENT, None, str(exc)
         return FetchOutcome.OK, data, ""
 
     @classmethod
     def extract(
-        cls, player: GamePlayer, data: coral.CubelifyResponse | None, key: str
+        cls, player: GamePlayer, data: coral.PlayerTagsResponse | None, key: str
     ) -> str | None:
+        # TODO: somewhat arbitrary for now; improve?
+        _color_map: dict[str, str] = {
+            "replays_needed": "§8",  # TODO: confirm name
+            "sniper": "§e",  # yellow
+            "closet_cheater": "§6",  # gold (orange-like)
+            "confirmed_cheater": "§c",  # red
+            "blatant_cheater": "§4",  # dark_red
+        }
+
         if data is None:
             return None
 
         if key == "coral_tag":
             tag_texts = [
-                nearest_mc_color(tag.color) + tag.text for tag in data.tags if tag.text
+                _color_map.get(tag.tag_type, "§d")
+                # e.g. "blatant_cheater" => "BC"
+                + "".join(filter(str.isupper, tag.tag_type.replace("_", " ").title()))
+                for tag in data.tags
             ]
+
             if not tag_texts:
                 return None
-            return f"§2C:{'§f/'.join(tag_texts)}"  # TODO: make better?
+            return f"§6C:{'§f/'.join(tag_texts)}"  # TODO: make better?
 
         return None
 
@@ -566,6 +641,110 @@ class ProviderPlugin:
     async def validate_keys(self) -> dict[type[Provider], bool]:
         return {type(p): await p.validate_key() for p in self.active_providers.values()}
 
+    @command("tags")
+    async def _command_tags(self: ProxhyPlugin, player: MojangPlayer):
+        # for now, hardcoding seraph & coral
+        seraph_provider: SeraphProvider = self.active_providers["seraph"]  # type: ignore
+        coral_provider: CoralProvider = self.active_providers["coral"]  # type: ignore
+
+        seraph_response, coral_response = await asyncio.gather(
+            seraph_provider._client.blacklist(player.uuid),
+            coral_provider._client.player_tags(player.uuid),
+            return_exceptions=True,
+        )
+
+        if (
+            isinstance(coral_response, BaseException)
+            or coral_response.displayname is None
+        ):
+            fname = f"§b{player.name}"
+        else:
+            fname = coral_response.displayname
+
+        # TODO / TAGS: add path for invalid api key specifically / specify error?
+        # TODO / TAGS: consolidate these errors instead of sending separately
+
+        for provider, response in {
+            "Seraph": seraph_response,
+            "Coral": coral_response,
+        }.items():
+            if isinstance(response, BaseException):
+                self.downstream.chat(
+                    TextComponent(f"Unable to fetch tags for {fname} from")
+                    .color("red")
+                    .appends(TextComponent(provider).color("gold"))
+                    .appends("!")
+                )
+
+        # check BaseException so type checker narrows properly to response type
+        has_seraph_tag = (
+            not isinstance(seraph_response, BaseException)
+            and (blinfo := seraph_response.data.blacklist) is not None
+            and blinfo.tagged
+        )
+        has_coral_tag = not isinstance(coral_response, BaseException) and any(
+            ctags := coral_response.tags
+        )
+
+        if not (has_seraph_tag or has_coral_tag):
+            return f"{fname} §chas no tags!"
+
+        output = TextComponent(f"§7Tags for {fname}§7:")
+
+        if blinfo is not None and blinfo.tagged:
+            seraph_match_data = parse_seraph_tooltip(blinfo.tooltip)
+
+            if seraph_match_data is not None:
+                output.appends(TextComponent("Seraph:").color("gold"), separator="\n")
+                output.append("\n ")
+
+                if (category := seraph_match_data.category) is not None:
+                    output.appends(TextComponent(category + ":").color("red"))
+                if cheats := seraph_match_data.cheats:
+                    output.appends(TextComponent(", ".join(cheats)).color("gray"))
+                if (unknown := seraph_match_data.unknown) is not None:
+                    output.appends(TextComponent("[" + unknown + "]").color("white"))
+                if seraph_match_data.upgraded:
+                    output.appends(TextComponent("(Upgraded)").color("yellow"))
+                if (author := seraph_match_data.author) is not None:
+                    output.hover_text(
+                        TextComponent(relative_time(blinfo.timestamp))
+                        .color("yellow")
+                        .appends("§7by")
+                        .appends(TextComponent(author).color("aqua"))
+                    )
+
+                output.appends(
+                    TextComponent(readable_time(blinfo.timestamp))
+                    .color("dark_gray")
+                    .italic()
+                )
+
+        # TODO / TAGS: add expiring date
+        # TODO / TAGS: hide username field; does that mean added_by_username is none?
+        if ctags:
+            output.appends(TextComponent("Coral").color("gold"), separator="\n")
+            for tag in ctags:
+                output.appends(
+                    TextComponent(f"{tag.tag_type.replace('_', ' ').title()}:")
+                    .color("red")
+                    .appends(TextComponent(tag.reason).color("gray")),
+                    separator="\n  ",
+                )
+                output.hover_text(
+                    TextComponent(relative_time(tag.added_on))
+                    .color("yellow")
+                    .appends("§7by")
+                    .appends(TextComponent(tag.added_by_username).color("aqua"))
+                )
+                output.appends(
+                    TextComponent(readable_time(tag.added_on))
+                    .color("dark_gray")
+                    .italic()
+                )
+
+        return output
+
 
 # here to avoid circular imports
 @dataclass
@@ -594,7 +773,7 @@ class GamePlayer:
 
     def __post_init__(self):
         self.offline_uuid = offline_uuid(self.username)
-        self.display_name = f"{self.team.prefix} {self.username}"
+        self.display_name = f"{self.team.prefix} §l{self.username}"
         self.default_display_name = self.display_name
 
     def field(self, key: str) -> str | None:

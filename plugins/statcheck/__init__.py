@@ -4,7 +4,7 @@ import re
 import typing
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeIs, get_args
 
@@ -34,12 +34,16 @@ from plugins.statcheck.models import (
 )
 from plugins.statcheck.providers import (
     DEFAULT_COLUMNS,
+    CoralProvider,
     FetchReport,
     GamePlayer,
     HypixelProvider,
+    SeraphProvider,
+    _GamePlayerTag,
     _LowerRegisteredProvider_T,
+    parse_seraph_tooltip,
 )
-from proxhy.utils import offline_uuid, uuid_version
+from proxhy.utils import offline_uuid, readable_time, relative_time, uuid_version
 from proxhypixel.models import Game
 
 if TYPE_CHECKING:
@@ -219,6 +223,7 @@ class StatCheckPlugin:
 
     def _build_player_display_name(self: ProxhyPlugin, player: GamePlayer) -> str:
         field_values = player.fields(DEFAULT_COLUMNS)  # will be customizable later
+        print(player.username, field_values)
         return " ".join(
             [
                 value
@@ -472,25 +477,23 @@ class StatCheckPlugin:
         fetch_response = await self.populate_player(player)
         if not fetch_response.ok:
             self.game_errors[player].append(fetch_response)
-        else:
-            player.display_name = (
-                display_name := self._build_player_display_name(player)
-            )
-            self.game_players[player.username] = player
 
-            show_stats = self.settings.bedwars.tablist.stats.show_stats.get() == "ON"
+        player.display_name = (display_name := self._build_player_display_name(player))
+        self.game_players[player.username] = player
 
-            if show_stats:
-                if player.status in {
-                    GamePlayerStatus.ELIMINATED,
-                    GamePlayerStatus.RESPAWNING,
-                    GamePlayerStatus.DISCONNECTED,
-                }:
-                    self._send_tablist_update(
-                        {player.offline_uuid: self._get_dead_display_name(player)}
-                    )
-                else:
-                    self._send_tablist_update({player.uuid: display_name})
+        show_stats = self.settings.bedwars.tablist.stats.show_stats.get() == "ON"
+
+        if show_stats:
+            if player.status in {
+                GamePlayerStatus.ELIMINATED,
+                GamePlayerStatus.RESPAWNING,
+                GamePlayerStatus.DISCONNECTED,
+            }:
+                self._send_tablist_update(
+                    {player.offline_uuid: self._get_dead_display_name(player)}
+                )
+            else:
+                self._send_tablist_update({player.uuid: display_name})
 
         player.stats_fetched = True
         await self.emit("statcheck:update", player)
@@ -522,17 +525,158 @@ class StatCheckPlugin:
             )
         return msg
 
+    def _compile_game_tags(
+        self: ProxhyPlugin, players: Iterable[GamePlayer]
+    ) -> TextComponent | None:
+        results: dict[GamePlayer, list[_GamePlayerTag]] = {}
+
+        for player in players:
+            results[player] = []
+
+            if (
+                # PLEASE accept pep 505
+                (sdata := player._provider_data[SeraphProvider]) is not None
+                and sdata.data is not None
+                and (bl := sdata.data.blacklist) is not None
+                and (smdata := parse_seraph_tooltip(bl.tooltip)) is not None
+                and sdata.data.blacklist.tagged
+            ):
+                results[player].append(
+                    _GamePlayerTag(
+                        source="Seraph",
+                        category=smdata.category or "Tagged",
+                        cheats=smdata.cheats,
+                        author=smdata.author,
+                        timestamp=bl.timestamp,
+                    )
+                )
+
+            if (
+                (cdata := player._provider_data[CoralProvider]) is not None
+                and cdata.data is not None
+                and cdata.data.tags
+            ):
+                for tag in cdata.data.tags:
+                    results[player].append(
+                        _GamePlayerTag(
+                            source="Coral",
+                            category=tag.tag_type.replace("_", " ").title(),
+                            cheats=tuple(tag.reason.split(", ")),
+                            author=tag.added_by_username,
+                            timestamp=tag.added_on,
+                        )
+                    )
+
+        # Tagged Players:
+        #   Player1: Blatant [S], Blatant [C], Sniper [S]
+        #   Player2: Closet [C]
+        # Run /gametags to view this message again.
+
+        # providers hover to `datetime\nTagged 3 months ago by added_username`
+        # cheats hover to `cheat1, cheat2\nClick to view all tags for playername`, click to `/tags playername`
+
+        if not any(results.values()):
+            return None
+
+        output = TextComponent("")
+        for player, player_tags in results.items():
+            if not player_tags:
+                continue
+
+            output.appends(
+                TextComponent(f"{player.default_display_name}§f:"), separator="\n"
+            )
+            for i, player_tag in enumerate(player_tags):
+                total = len(player_tags)
+
+                output.appends(
+                    # e.g. "Blatant" or "Sniper"
+                    TextComponent(player_tag.category.split(" ")[0])
+                    .color("red")
+                    .hover_text(
+                        TextComponent(
+                            ", ".join(player_tag.cheats) or "No reasons listed!"
+                        )
+                        .color("gray")
+                        .appends(
+                            TextComponent("Click to view all tags for").color("yellow"),
+                            separator="\n",
+                        )
+                        .appends(player.team.code + player.username)
+                    )
+                    .click_event("run_command", f"/tags {player.username}")
+                )
+
+                # [S] for Seraph and [C] for Coral
+                output.appends(
+                    TextComponent(f"[{player_tag.source[0].upper()}]")
+                    .color("gray")
+                    .hover_text(
+                        TextComponent(readable_time(player_tag.timestamp))
+                        .color("dark_gray")
+                        .appends(
+                            TextComponent("Tagged")
+                            .color("gray")
+                            .appends(
+                                TextComponent(
+                                    relative_time(player_tag.timestamp)
+                                ).color("yellow")
+                            )
+                            .appends("§7by")
+                            .appends(
+                                TextComponent(player_tag.author or "<unknown>").color(
+                                    "aqua"
+                                )
+                            ),
+                            separator="\n",
+                        )
+                    ),
+                )
+
+                if i != (total - 1):
+                    output.append("§7;")
+
+        output.appends(
+            TextComponent("Run /gametags to see this message again.")
+            .color("gray")
+            .italic()
+            .hover_text(TextComponent("/gametags").color("yellow"))
+            .click_event("run_command", "/gametags"),
+            separator="\n",
+        )
+
+        return output
+
+    @command("gametags", "gt")
+    async def _command_gametags(self: ProxhyPlugin):
+        if (gametagmsg := self._compile_game_tags(self.game_players.values())) is None:
+            raise CommandException("No players are tagged in this game!")
+        self.downstream.chat(gametagmsg)
+
     @subscribe("statcheck:update")
     async def _event_statcheck_update(self: ProxhyPlugin, _match, data: GamePlayer):
         if all(player.stats_fetched for player in self.game_players.values()):
-            # send collected errors
-            if self.game_errors:
-                self.downstream.chat(self._compile_errors(self.game_errors))
-            self.game_errors.clear()  # since we are done with them (sent)
-            self.who_players_statted.set()
-            if self.settings.bedwars.display_top_stats.get() != "OFF":
-                if not self.stats_highlighted:
-                    await self.stat_highlights()
+            await self.emit("statcheck:finished")
+
+    @subscribe("statcheck:finished")
+    async def _event_statcheck_finished(self: ProxhyPlugin, _match, data: GamePlayer):
+        # send collected errors
+        if self.game_errors:
+            self.downstream.chat(self._compile_errors(self.game_errors))
+
+        self.game_errors.clear()  # since we are done with them (sent)
+        self.who_players_statted.set()
+
+        # highlight top stats
+        if self.settings.bedwars.display_top_stats.get() != "OFF":
+            if not self.stats_highlighted:
+                await self.stat_highlights()
+
+        # send tagged players
+        if (
+            gametag_msg := self._compile_game_tags(self.game_players.values())
+        ) is not None:
+            self.downstream.chat(gametag_msg)
 
     # TODO: rewrite with new system
     async def highlight_adjacent_teams(self: ProxhyPlugin) -> None:
@@ -783,7 +927,9 @@ class StatCheckPlugin:
 
             _fppd = player._provider_data[HypixelProvider]
             if _fppd is None or _fppd.data is None:
-                self.logger.debug("no hypixel stats; cannot highlight")
+                self.logger.debug(
+                    f"no hypixel stats for {player.username}; cannot highlight"
+                )
                 return
 
             fdict = _fppd.data

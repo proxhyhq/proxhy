@@ -6,7 +6,8 @@ import pickle
 import uuid
 import uuid as _uuid
 from collections import namedtuple
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -300,3 +301,41 @@ def nearest_mc_color(decimal_color: int) -> str:
 
 
 code, rgb = nearest_mc_color(12131356)
+
+
+# necessary function btw
+def handle_s_or_ms[T](func: Callable[[int], T]):
+    def wrapper(timestamp: int) -> T:
+        if timestamp > 1e12:
+            timestamp //= 1000
+
+        return func(timestamp)
+
+    return wrapper
+
+
+@handle_s_or_ms
+def relative_time(timestamp: int) -> str:
+    delta = datetime.now(UTC) - datetime.fromtimestamp(timestamp, UTC)
+    seconds = int(delta.total_seconds())
+
+    intervals = (
+        ("year", 31536000),
+        ("month", 2592000),
+        ("day", 86400),
+        ("hour", 3600),
+        ("minute", 60),
+    )
+
+    for name, secs in intervals:
+        if seconds >= secs:
+            n = seconds // secs
+            return f"{n} {name}{'s' if n != 1 else ''} ago"
+
+    return "just now"
+
+
+@handle_s_or_ms
+def readable_time(timestamp: int) -> str:
+    dt_object = datetime.fromtimestamp(timestamp, UTC)
+    return dt_object.strftime("%B %d, %Y, %I:%M %p")
