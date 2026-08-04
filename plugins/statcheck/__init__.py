@@ -655,7 +655,11 @@ class StatCheckPlugin:
 
     @subscribe("statcheck:update")
     async def _event_statcheck_update(self: ProxhyPlugin, _match, data: GamePlayer):
-        if all(player.stats_fetched for player in self.game_players.values()):
+        if (
+            all(player.stats_fetched for player in self.game_players.values())
+            and not self.who_players_statted.is_set()
+        ):
+            self.who_players_statted.set()
             await self.emit("statcheck:finished")
 
     @subscribe("statcheck:finished")
@@ -665,7 +669,6 @@ class StatCheckPlugin:
             self.downstream.chat(self._compile_errors(self.game_errors))
 
         self.game_errors.clear()  # since we are done with them (sent)
-        self.who_players_statted.set()
 
         # highlight top stats
         if self.settings.bedwars.display_top_stats.get() != "OFF":
@@ -1261,6 +1264,7 @@ class StatCheckPlugin:
         if self.gamestate.get_player_by_name_from_player_list(player.username):
             player.status = GamePlayerStatus.ALIVE
         elif player.username in self.game_players:
+            self.mark_player_disconnected(player)
             self.downstream.chat(
                 f"{player.team.code}{player.username}§7 disconnected while respawning."
             )
@@ -1284,6 +1288,33 @@ class StatCheckPlugin:
             )
 
         self.create_task(self.respawn_timer(player, reconnect=True))
+
+    def mark_player_disconnected(self: ProxhyPlugin, player: GamePlayer):
+        player.status = GamePlayerStatus.DISCONNECTED
+
+        if player.respawn_timer_task is not None:
+            player.respawn_timer_task.cancel()
+
+        if self.settings.bedwars.tablist.show_eliminated_players.get() == "ON":
+            if player.username == self.nick_or_username:
+                self.downstream.send_packet(
+                    0x38,
+                    VarInt.pack(4),
+                    VarInt.pack(1),
+                    UUID.pack(player.uuid),
+                )
+            self.downstream.send_packet(
+                0x38,
+                VarInt.pack(0),  # spawn player
+                VarInt.pack(1),  # number of players
+                UUID.pack(player.offline_uuid),
+                String.pack(player.username),
+                VarInt.pack(0),
+                VarInt.pack(3),  # gamemode; spectator
+                VarInt.pack(0),  # ping
+                Boolean.pack(True),
+                Chat.pack(self._get_disconnected_display_name(player)),
+            )
 
     @subscribe(f"chat:server:{'|'.join(KILL_MSGS)}")
     async def _statcheck_event_chat_server_kill_msg(
@@ -1328,31 +1359,7 @@ class StatCheckPlugin:
         gplayer = self.game_players[username]
 
         if message.endswith("disconnected."):
-            gplayer.status = GamePlayerStatus.DISCONNECTED
-
-            if gplayer.respawn_timer_task is not None:
-                gplayer.respawn_timer_task.cancel()
-
-            if self.settings.bedwars.tablist.show_respawn_timer.get() == "ON":
-                if gplayer.username == self.nick_or_username:
-                    self.downstream.send_packet(
-                        0x38,
-                        VarInt.pack(4),
-                        VarInt.pack(1),
-                        UUID.pack(gplayer.uuid),
-                    )
-                self.downstream.send_packet(
-                    0x38,
-                    VarInt.pack(0),  # spawn player
-                    VarInt.pack(1),  # number of players
-                    UUID.pack(gplayer.offline_uuid),
-                    String.pack(gplayer.username),
-                    VarInt.pack(0),
-                    VarInt.pack(3),  # gamemode; spectator
-                    VarInt.pack(0),  # ping
-                    Boolean.pack(True),
-                    Chat.pack(self._get_disconnected_display_name(gplayer)),
-                )
+            self.mark_player_disconnected(gplayer)
             return
 
         if fk:
