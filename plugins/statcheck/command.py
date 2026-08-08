@@ -188,8 +188,6 @@ class StatcheckCommandPlugin:
         except TimeoutError:
             self.logger.debug("logging stats on logout took too long!")
 
-        await self.hypixel_client.close()
-
     async def log_stats(self: ProxhyPlugin, event: str) -> None:
         if self.dev_mode:
             return

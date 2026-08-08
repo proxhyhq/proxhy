@@ -572,8 +572,7 @@ _migrated_legacy_api_key = False
 _shared_providers: dict[_LowerRegisteredProvider_T, Provider] = {}
 
 for provider_name, provider in REGISTERED_PROVIDERS.items():
-    if provider is not HypixelProvider and provider_name not in _shared_providers:
-        _shared_providers[provider_name] = provider.setup()
+    _shared_providers[provider_name] = provider.setup()
 
 
 class ProviderPlugin:
@@ -598,16 +597,12 @@ class ProviderPlugin:
         self.create_task(self._login_success_helper())
 
     async def _login_success_helper(self: ProxhyPlugin):
-        # TODO: maybe not hardocde so much?
-        self.hypixel_client = hypixel.Client(
-            get_secret("hypixel_api_key"), cache_h=False, cache_m=False
-        )
-        self.active_providers["hypixel"] = (
-            hprovider := HypixelProvider(client=self.hypixel_client)
-        )
-        self.hypixel_provider: HypixelProvider = hprovider
-
+        self.hypixel_provider: HypixelProvider = self.active_providers["hypixel"]  # type: ignore
         self.create_task(self.log_stats("login"))
+
+    @property
+    def hypixel_client(self: ProxhyPlugin) -> hypixel.Client:
+        return self.active_providers["hypixel"]._client
 
     async def populate_player(
         self, player: GamePlayer, *, retry_delay: float = 0.0

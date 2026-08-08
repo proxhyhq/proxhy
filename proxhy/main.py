@@ -25,7 +25,6 @@ import mcauth as auth
 from gamestate.models import warm_up_jit
 from proxhy import session
 from proxhy.loop_watchdog import LoopWatchdog
-from proxhy.proxhy import Proxhy
 from proxhy.utils import zero_pad_calver
 
 _log_dir = user_log_path("proxhy")
@@ -162,6 +161,8 @@ class ProxhyServer:
 
 
 async def handle_client(reader: StreamReader, writer: StreamWriter):
+    from proxhy.proxhy import Proxhy
+
     proxy = Proxhy(
         reader,
         writer,
@@ -222,6 +223,11 @@ async def shutdown(loop: asyncio.AbstractEventLoop, server: ProxhyServer, _):
     try:
         await _shutdown(loop, server)
     finally:
+        from plugins.statcheck.providers import _shared_providers
+
+        for provider in _shared_providers.values():
+            await provider._client.close()
+
         await session.http_client.aclose()
         loop.stop()
 
