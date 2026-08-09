@@ -4,6 +4,11 @@
     "min_height": 62,
     "rush_direction": "main"
   },
+  "acropora": {
+    "max_height": 99,
+    "min_height": 71,
+    "rush_direction": "main"
+  },
   "aetius": {
     "max_height": 95,
     "min_height": 68,
@@ -982,7 +987,7 @@
   "zarzul": {
     "max_height": 115,
     "min_height": 88,
-    "rush_direction": "alt"
+    "rush_direction": "main"
   },
   "zen plaza": {
     "max_height": 84,
