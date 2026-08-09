@@ -223,7 +223,6 @@ class StatCheckPlugin:
 
     def _build_player_display_name(self: ProxhyPlugin, player: GamePlayer) -> str:
         field_values = player.fields(DEFAULT_COLUMNS)  # will be customizable later
-        print(player.username, field_values)
         return " ".join(
             [
                 value
@@ -1111,11 +1110,15 @@ class StatCheckPlugin:
             self.game.started = True
 
     @command("resetkey")
-    async def _command_reset_key(self: ProxhyPlugin):
-        """Reset your Hypixel API key."""
-        self.hypixel_client.remove_key(self.hypixel_api_key)
-        self.hypixel_api_key = ""
-        return TextComponent("Reset your Hypixel API key!").color("green")
+    async def _command_reset_key(
+        self: ProxhyPlugin, provider: _LowerRegisteredProvider_T
+    ):
+        """Reset an API key."""
+        provider_obj = self.active_providers[provider]
+        del provider_obj.api_key
+        return TextComponent(
+            f"Reset your {provider_obj.display_name()} API key!"
+        ).color("green")
 
     @command("key", "apikey")
     async def _command_key(
@@ -1159,7 +1162,9 @@ class StatCheckPlugin:
                     .appends(
                         TextComponent("[Click to Reset]")
                         .color("red")
-                        .click_event("run_command", "/resetkey")
+                        .click_event(
+                            "run_command", f"/resetkey {provider.internal_name()}"
+                        )
                     )
                 )
             else:
