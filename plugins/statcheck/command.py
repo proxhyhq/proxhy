@@ -1,7 +1,6 @@
 import asyncio
 import datetime
 import os
-import re
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -14,6 +13,7 @@ from petty.models import TextComponent
 from plugins.commands import CommandContext, CommandException, Lazy, command
 from proxhy.argtypes import Gamemode, HypixelPlayer, Statistic
 from proxhy.argtypes.hypixel import GAMETYPE_T, Stat
+from proxhy.utils import readable_time
 from proxhypixel.formatting import (
     format_bedwars_dict,
     format_bw_star,
@@ -100,7 +100,7 @@ class StatcheckCommandPlugin:
             )
         else:
             local_login = player.last_login.astimezone()
-            formatted = self._format_date_with_ordinal(local_login)
+            formatted = readable_time(local_login.timestamp())  # type: ignore
             tz_name = local_login.strftime("%Z")
             return (
                 TextComponent(rankname)
@@ -146,14 +146,14 @@ class StatcheckCommandPlugin:
     @command("scwfull", "scweeklyfull")
     async def _command_scweeklyfull(
         self: ProxhyPlugin,
-        _player: Lazy[HypixelPlayer] | None = None,
+        player: Lazy[HypixelPlayer] | None = None,
         mode: SCSupportedGamemode | None = None,
         *stats: Statistic,
     ):
         """Check player stats for the past 7 days with all modes."""
-        player = await _player if _player else None
+        _player = await player if player else None
         return await self._sc_internal(
-            player=player,
+            player=_player,
             mode=self._resolve_mode(mode),
             window=7.0,
             stat_names=stats,
@@ -163,15 +163,15 @@ class StatcheckCommandPlugin:
     @command("scfull")
     async def _command_scfull(
         self: ProxhyPlugin,
-        _player: Lazy[HypixelPlayer] | None = None,
+        player: Lazy[HypixelPlayer] | None = None,
         mode: SCSupportedGamemode | None = None,
         window: float | None = None,
         *stats: Statistic,
     ):
         """Check player stats with all modes."""
-        player = await _player if _player else None
+        _player = await player if player else None
         return await self._sc_internal(
-            player=player,
+            player=_player,
             mode=self._resolve_mode(mode),
             window=window,
             stat_names=stats,
@@ -233,10 +233,6 @@ class StatcheckCommandPlugin:
         except Exception as e:
             print(f"Error writing stat log: {e}")
             pass  # TODO: log this
-
-    @staticmethod
-    def _is_uuid(value: str) -> bool:
-        return bool(re.fullmatch(r"[0-9a-f]{32}", value, re.IGNORECASE))
 
     def _find_closest_stat_log(
         self, uuid: str, window: float, gamemode: GAMETYPE_T
@@ -303,33 +299,6 @@ class StatcheckCommandPlugin:
             wlr = 0.0
 
         return round(fkdr, 2), round(wlr, 2)
-
-    def _format_date_with_ordinal(self: ProxhyPlugin, dt: datetime.datetime) -> str:
-        """Format a datetime as 'Month Dayth, Year (H:MM AM/PM)'.
-
-        Args:
-            dt: Datetime to format
-
-        Returns:
-            Formatted string like 'January 1st, 2024 (8:42 PM)'
-        """
-
-        def ordinal(n: int) -> str:
-            if 11 <= (n % 100) <= 13:
-                return f"{n}th"
-            last_digit = n % 10
-            if last_digit == 1:
-                return f"{n}st"
-            elif last_digit == 2:
-                return f"{n}nd"
-            elif last_digit == 3:
-                return f"{n}rd"
-            else:
-                return f"{n}th"
-
-        formatted_date = f"{dt.strftime('%B')} {ordinal(dt.day)}, {dt.strftime('%Y')}"
-        formatted_time = dt.strftime("%I:%M %p").lstrip("0")
-        return f"{formatted_date} ({formatted_time})"
 
     def _calculate_mode_stats(
         self,
@@ -481,7 +450,7 @@ class StatcheckCommandPlugin:
             diffs = self._calculate_stat_deltas(current_stats, old_stats, required_keys)
             fdict = format_bedwars_dict(diffs)
 
-            formatted_date = self._format_date_with_ordinal(chosen_date)
+            formatted_date = readable_time(chosen_date.timestamp())  # type: ignore
             hover_text = f"Recent stats for {rankname}\nCalculated using data from {formatted_date}\n"
         else:
             fdict = format_bedwars_dict(current_stats)
@@ -569,7 +538,7 @@ class StatcheckCommandPlugin:
             )
             diffs = self._calculate_stat_deltas(current_stats, old_stats, required_keys)
             fdict = format_skywars_dict(diffs)
-            formatted_date = self._format_date_with_ordinal(chosen_date)
+            formatted_date = readable_time(chosen_date.timestamp())  # type: ignore
             hover_text = f"Recent stats for {rankname}\nCalculated using data from {formatted_date}\n"
         else:
             fdict = format_skywars_dict(current_stats)
