@@ -252,7 +252,7 @@ class StatCheckPlugin:
         return f"§6§l{player.respawn_time}s {self._get_dead_display_name(player)}"
 
     def _get_disconnected_display_name(self: ProxhyPlugin, player: GamePlayer) -> str:
-        return f"§6§lD {self._get_dead_display_name(player)}"
+        return f"§4§lD {self._get_dead_display_name(player)}"
 
     def _remove_display_names(self: ProxhyPlugin, players: Collection[GamePlayer]):
         self.downstream.send_packet(
