@@ -13,6 +13,7 @@ else:
 datas = [("assets", "assets")]
 binaries = []
 hiddenimports += collect_submodules("proxhy")
+hiddenimports += collect_submodules("dbm")
 tmp_ret = collect_all("numba")
 datas += tmp_ret[0]
 binaries += tmp_ret[1]
