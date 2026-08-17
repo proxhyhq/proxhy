@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 BW_MAPS: dict = load_json_asset("bedwars_maps.json")
 RUSH_MAPPINGS = load_json_asset("rush_mappings.json")
 KILL_MSGS: list[str] = load_json_asset("bedwars_chat.json")["kill_messages"]
+_KILL_MSG_BODIES = [m.removeprefix("^").removesuffix("$") for m in KILL_MSGS]
 
 # block all the game start messages
 GAME_START_MESSAGE_SETS: list[list[str]] = load_json_asset("bedwars_chat.json")[
@@ -1321,7 +1322,7 @@ class StatCheckPlugin:
                 Chat.pack(self._get_disconnected_display_name(player)),
             )
 
-    @subscribe(f"chat:server:{'|'.join(KILL_MSGS)}")
+    @subscribe(f"chat:server:(?:{'|'.join(_KILL_MSG_BODIES)})")
     async def _statcheck_event_chat_server_kill_msg(
         self: ProxhyPlugin, _match, buff: Buffer
     ):

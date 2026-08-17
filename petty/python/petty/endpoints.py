@@ -100,8 +100,16 @@ class PacketNode(ABC):
         while not self._should_stop and (
             packet_length := await VarInt.unpack_stream(stream)
         ):
+            truncated = False
             while len(data) < packet_length:
-                data += await stream.read(packet_length - len(data))
+                chunk = await stream.read(packet_length - len(data))
+                if not chunk:  # disconnected mid-packet
+                    truncated = True
+                    break
+                data += chunk
+
+            if truncated:
+                break
 
             buff = Buffer(data)
 

@@ -91,7 +91,10 @@ class VarInt(_VarInt):
         shift = 0
         val = 0x80
 
-        while (val & 0x80) and (data := await stream.read(1)):
+        while val & 0x80:
+            data = await stream.read(1)
+            if not data:
+                return 0
             val = struct.unpack("B", data)[0]
             total |= (val & 0x7F) << shift
             shift += 7
