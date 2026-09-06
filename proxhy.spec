@@ -6,7 +6,7 @@ import platform
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 if platform.system() == "Windows":
-    hiddenimports = ["winloop"]
+    hiddenimports = collect_submodules("winloop")
 else:
     hiddenimports = ["uvloop"]
 
