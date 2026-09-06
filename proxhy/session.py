@@ -1,5 +1,6 @@
-from httpx import AsyncClient
 import ssl
+
+from httpx import AsyncClient
 
 custom_ssl_context = ssl.create_default_context()
 
