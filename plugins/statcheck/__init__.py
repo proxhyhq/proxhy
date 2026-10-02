@@ -38,10 +38,8 @@ from plugins.statcheck.providers import (
     FetchReport,
     GamePlayer,
     HypixelProvider,
-    SeraphProvider,
     _GamePlayerTag,
     _LowerRegisteredProvider_T,
-    parse_seraph_tooltip,
 )
 from proxhy.utils import offline_uuid, readable_time, relative_time, uuid_version
 from proxhypixel.models import Game
@@ -535,23 +533,6 @@ class StatCheckPlugin:
 
             if (
                 # PLEASE accept pep 505
-                (sdata := player._provider_data[SeraphProvider]) is not None
-                and sdata.data is not None
-                and (bl := sdata.data.blacklist) is not None
-                and (smdata := parse_seraph_tooltip(bl.tooltip)) is not None
-                and sdata.data.blacklist.tagged
-            ):
-                results[player].append(
-                    _GamePlayerTag(
-                        source="Seraph",
-                        category=smdata.category or "Tagged",
-                        cheats=smdata.cheats,
-                        author=smdata.author,
-                        timestamp=bl.timestamp,
-                    )
-                )
-
-            if (
                 (cdata := player._provider_data[CoralProvider]) is not None
                 and cdata.data is not None
                 and cdata.data.tags
@@ -607,7 +588,7 @@ class StatCheckPlugin:
                     .click_event("run_command", f"/tags {player.username}")
                 )
 
-                # [S] for Seraph and [C] for Coral
+                # [C] for Coral
                 output.appends(
                     TextComponent(f"[{player_tag.source[0].upper()}]")
                     .color("gray")

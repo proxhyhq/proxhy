@@ -1,5 +1,4 @@
 import asyncio
-import re
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
@@ -11,7 +10,6 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, Self
 import coral
 import hypixel
 import keyring
-import seraph
 from petty.events import subscribe
 from petty.models import TextComponent
 
@@ -35,7 +33,6 @@ DEFAULT_COLUMNS = (
     "nick_tag",
     "username",
     "fkdr",
-    "seraph_tag",
     "coral_tag",
 )
 
@@ -384,104 +381,6 @@ class _GamePlayerTag:
     timestamp: int  # utc; ms
 
 
-seraph_pattern = re.compile(
-    r"^(?:(?P<category>[^:\[]+):\s*)?"
-    r"(?:\[(?P<unknown>[^\]]+)\]:\s*)?"
-    r"(?P<cheats>[^(]*?)\s*"
-    r"(?:\(\s*(?P<upgraded>Upgraded)\s*\))?\s*"
-    r"(?:\(\s*(?P<time>.+?)\s+ago\s+by\s+(?P<author>.+?)\s*\))?\s*$"
-)
-
-
-@dataclass
-class SeraphMatch:
-    category: str | None
-    unknown: str | None
-    cheats: tuple[str]
-    upgraded: bool
-    author: str | None
-
-
-def parse_seraph_tooltip(tooltip: str) -> SeraphMatch | None:
-    # e.g. "Blatant Cheating: [seraphac]: legit, scaffold ( Upgraded ) ( 4 months ago by lvlw* ) "
-    m = seraph_pattern.match(tooltip)
-    if m is None:
-        return None
-
-    d = m.groupdict()
-    return SeraphMatch(
-        category=d["category"],
-        unknown=d["unknown"],
-        cheats=tuple(c.strip() for c in d["cheats"].split(",")) if d["cheats"] else (),  # type: ignore
-        upgraded=d["upgraded"] is not None,
-        author=d["author"],
-    )
-
-
-class SeraphProvider(Provider[seraph.Seraph, seraph.BlacklistData]):
-    _fields = {"seraph_tag": "Seraph Tag"}
-    max_retries = 1
-
-    @classmethod
-    def _new_client(cls, api_key: str | None = None) -> seraph.Seraph:
-        return seraph.Seraph(api_key or "")
-
-    async def _validate_key(self, client: seraph.Seraph) -> bool:
-        try:
-            await client.blacklist("3e392b7f-b18f-49ec-a058-8c7227febd9e")
-            return True
-        except seraph.SeraphError:
-            return False
-            # if (
-            #     e.cause == "Invalid API Key"
-            # ):  # could alternatively check e.code/e.status == 401?
-            #     return False
-            # else:
-            #     # TODO: log instead of this
-            #     raise RuntimeError("This should not happen!")
-
-    async def _fetch(
-        self, player: GamePlayer
-    ) -> tuple[FetchOutcome, seraph.BlacklistData | None, str]:
-        try:
-            data = await self._client.blacklist(str(player.uuid))
-        except Exception as exc:  # TODO: narrow
-            return FetchOutcome.TRANSIENT, None, str(exc)
-        else:
-            if not data.success:
-                # TODO: fix?
-                return FetchOutcome.TRANSIENT, None, str(data.code)
-        return FetchOutcome.OK, data.data, ""
-
-    @classmethod
-    def extract(
-        cls, player: GamePlayer, data: seraph.BlacklistData | None, key: str
-    ) -> str | None:
-        if data is None or data.blacklist is None:
-            return None
-
-        _color_map: dict[str, str] = {
-            "Sniping": "§e",  # yellow
-            "Closet Cheating": "§c",  # red
-            "Blatant Cheating": "§4",  # dark_red
-        }
-
-        if key == "seraph_tag":
-            # TODO: can seraph have multiple tags?
-            if (
-                data.blacklist.tagged
-                and (tagdata := parse_seraph_tooltip(data.blacklist.tooltip))
-                is not None
-            ):
-                tag = _color_map.get(tagdata.category or "Tagged", "§d") + "".join(
-                    # e.g. "Blatant Cheating" => "BC"
-                    filter(str.isupper, tagdata.category or "Tagged")
-                )
-                return f"§6S:{tag}"
-
-        return None
-
-
 class CoralProvider(Provider[coral.Coral, coral.PlayerTagsResponse]):
     _fields = {"coral_tag": "Coral Tag"}
     max_retries = 1
@@ -537,15 +436,14 @@ class CoralProvider(Provider[coral.Coral, coral.PlayerTagsResponse]):
         return None
 
 
-RegisteredProvider_T = Literal["Hypixel", "Seraph", "Coral"]
-_LowerRegisteredProvider_T = Literal["hypixel", "seraph", "coral"]  # not pretty
+RegisteredProvider_T = Literal["Hypixel", "Coral"]
+_LowerRegisteredProvider_T = Literal["hypixel", "coral"]  # not pretty
 REGISTERED_PROVIDERS: dict[_LowerRegisteredProvider_T, type[Provider]] = {
     "hypixel": HypixelProvider,
-    "seraph": SeraphProvider,
     "coral": CoralProvider,
 }
 
-# e.g. {"bedwars_star": HypixelProvider, "seraph_tag": SeraphProvider}
+# e.g. {"bedwars_star": HypixelProvider, "coral_tag": CoralProvider}
 _PROVIDER_FIELD_MAP: dict[str, type[Provider]] = {}
 for _provider in REGISTERED_PROVIDERS.values():
     for _key in _provider._fields:
@@ -638,12 +536,10 @@ class ProviderPlugin:
 
     @command("tags")
     async def _command_tags(self: ProxhyPlugin, player: MojangPlayer):
-        # for now, hardcoding seraph & coral
-        seraph_provider: SeraphProvider = self.active_providers["seraph"]  # type: ignore
+        # for now, hardcoding coral
         coral_provider: CoralProvider = self.active_providers["coral"]  # type: ignore
 
-        seraph_response, coral_response = await asyncio.gather(
-            seraph_provider._client.blacklist(player.uuid),
+        (coral_response,) = await asyncio.gather(
             coral_provider._client.player_tags(player.uuid),
             return_exceptions=True,
         )
@@ -660,7 +556,6 @@ class ProviderPlugin:
         # TODO / TAGS: consolidate these errors instead of sending separately
 
         for provider, response in {
-            "Seraph": seraph_response,
             "Coral": coral_response,
         }.items():
             if isinstance(response, BaseException):
@@ -671,49 +566,14 @@ class ProviderPlugin:
                     .appends("!")
                 )
 
-        # check BaseException so type checker narrows properly to response type
-        has_seraph_tag = (
-            not isinstance(seraph_response, BaseException)
-            and (blinfo := seraph_response.data.blacklist) is not None
-            and blinfo.tagged
-        )
         has_coral_tag = not isinstance(coral_response, BaseException) and any(
             ctags := coral_response.tags
         )
 
-        if not (has_seraph_tag or has_coral_tag):
+        if not has_coral_tag:
             return f"{fname} §chas no tags!"
 
         output = TextComponent(f"§7Tags for {fname}§7:")
-
-        if blinfo is not None and blinfo.tagged:
-            seraph_match_data = parse_seraph_tooltip(blinfo.tooltip)
-
-            if seraph_match_data is not None:
-                output.appends(TextComponent("Seraph:").color("gold"), separator="\n")
-                output.append("\n ")
-
-                if (category := seraph_match_data.category) is not None:
-                    output.appends(TextComponent(category + ":").color("red"))
-                if cheats := seraph_match_data.cheats:
-                    output.appends(TextComponent(", ".join(cheats)).color("gray"))
-                if (unknown := seraph_match_data.unknown) is not None:
-                    output.appends(TextComponent("[" + unknown + "]").color("white"))
-                if seraph_match_data.upgraded:
-                    output.appends(TextComponent("(Upgraded)").color("yellow"))
-                if (author := seraph_match_data.author) is not None:
-                    output.hover_text(
-                        TextComponent(relative_time(blinfo.timestamp))
-                        .color("yellow")
-                        .appends("§7by")
-                        .appends(TextComponent(author).color("aqua"))
-                    )
-
-                output.appends(
-                    TextComponent(readable_time(blinfo.timestamp))
-                    .color("dark_gray")
-                    .italic()
-                )
 
         # TODO / TAGS: add expiring date
         # TODO / TAGS: hide username field; does that mean added_by_username is none?

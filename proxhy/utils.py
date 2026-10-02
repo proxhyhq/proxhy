@@ -288,7 +288,7 @@ def nearest_mc_color(decimal_color: int) -> str:
 
     diff: npt.NDArray[np.int32] = _COLORS.astype(np.int32) - rgb.astype(np.int32)
 
-    distances: npt.NDArray[np.int32] = np.sum(diff * diff, axis=1)
+    distances: npt.NDArray[np.int32] = np.sum(diff * diff, axis=1)  # type: ignore
     idx: np.intp = np.argmin(distances)
 
     return _CODES[idx].item()
